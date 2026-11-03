@@ -116,6 +116,7 @@ install -m 755 dist/dmm ~/.local/bin/dmm
 | パス | 内容 |
 | --- | --- |
 | `credentials.json` | メールアドレスとログインセッション。パスワードは保存しません |
+| `saved-login.json` | Windowsのみ。自動再ログイン用のメールアドレスとパスワード。DPAPIで暗号化し、同じWindowsユーザーでのみ復号できます（macOSはキーチェーンに保存） |
 | `library.json` | 履歴・分析結果・復習済みの記録 |
 | `manifest.json` | 取得日時・条件・取得月・件数 |
 | `sources/` | 取得した履歴・録音メタデータ |
