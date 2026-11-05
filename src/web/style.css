@@ -1493,6 +1493,43 @@ footer {
   font-size: 10px;
   color: var(--accent);
 }
+.teacher-lines {
+  margin: 10px 0 0;
+}
+.teacher-lines summary {
+  font-size: 11px;
+  color: #657955;
+  cursor: pointer;
+}
+.teacher-lines .outline-button {
+  padding: 7px 12px;
+  font-size: 10px;
+}
+.teacher-lines small {
+  display: block;
+  margin-top: 6px;
+  font-size: 9px;
+  color: #a2aa92;
+}
+.reflection-empty .teacher-lines {
+  margin-top: 26px;
+}
+.teacher-transcript {
+  list-style: none;
+  max-height: 420px;
+}
+.spoken-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0 0 6px;
+}
+.teacher-transcript .timestamp {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
 
 .assessment {
   margin: 28px 0 0;

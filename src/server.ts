@@ -48,6 +48,7 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
                 audio: l.audio ? { seconds: l.audio.seconds } : undefined,
               })),
               status: companion.status,
+              transcription: companion.transcription,
               model: companion.model,
               dataDir: store.root,
               canSync: Boolean(store.credentials().dmmCookie),
@@ -96,6 +97,16 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
           );
           return Response.json({ ok: true }, { status: 202 });
         }
+        // Transcribing runs on this computer beside reviews and syncs, so it is accepted while they run.
+        if (url.pathname === "/api/transcribe" && request.method === "POST") {
+          const body = (await request.json()) as { ids?: unknown };
+          if (
+            !Array.isArray(body.ids) ||
+            !body.ids.every((id) => typeof id === "string" && /^[\w-]+$/.test(id))
+          )
+            return Response.json({ error: "idsが不正です。" }, { status: 400 });
+          return Response.json({ queued: companion.transcribe(body.ids) }, { status: 202 });
+        }
         if (url.pathname === "/api/analyze" && request.method === "POST") {
           const body: unknown = await request.json();
           if (
@@ -115,6 +126,14 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
             return Response.json({ error: "書き起こしがありません。" }, { status: 404 });
           const saved = (await file.json()) as { transcript: string; model: string };
           return Response.json({ transcript: saved.transcript, model: saved.model });
+        }
+        const teacher = /^\/api\/lessons\/([\w-]+)\/teacher$/.exec(url.pathname);
+        if (teacher?.[1] && request.method === "GET") {
+          const file = Bun.file(store.path("analyses", `${store.lesson(teacher[1]).id}.teacher.json`));
+          if (!(await file.exists()))
+            return Response.json({ error: "先生の発言の書き起こしがありません。" }, { status: 404 });
+          const saved = (await file.json()) as { lines: unknown; model: string };
+          return Response.json({ lines: saved.lines, model: saved.model });
         }
         const review = /^\/api\/lessons\/([\w-]+)\/review$/.exec(url.pathname);
         if (review?.[1] && request.method === "POST") {

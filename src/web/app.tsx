@@ -5,6 +5,7 @@ import { slackShareText } from "../share";
 import { clock, span, timedSegments } from "../timestamps";
 import { LessonAssessment } from "./assessment";
 import { Growth } from "./growth";
+import { TeacherLines } from "./listening";
 import { LessonSpeaking } from "./speaking";
 import { NativeExamples } from "./youglish";
 
@@ -15,6 +16,7 @@ type ViewLesson = Omit<Lesson, "tracks" | "audio"> & {
 type Snapshot = Omit<Library, "lessons"> & {
   lessons: ViewLesson[];
   status: { busy: boolean; message: string; error: string };
+  transcription: { queue: string[]; progress: number };
   model: string;
   dataDir: string;
   canSync: boolean;
@@ -118,6 +120,8 @@ function App() {
   const favoriteCount = lessons.reduce((sum, l) => sum + (l.favorites?.length ?? 0), 0);
   const analyzed = lessons.filter((l) => l.feedback).length;
   const busy = Boolean(data?.status.busy);
+  const transcribing = lessons.find((l) => l.id === data?.transcription.queue[0]);
+  const transcriptAt = lesson ? (data?.transcription.queue.indexOf(lesson.id) ?? -1) : -1;
   const months = [
     ...new Set(
       lessons.map((l) =>
@@ -145,6 +149,16 @@ function App() {
           .toLowerCase()
           .includes(query.toLowerCase()),
     );
+  const teacherLines = lesson?.audio && lesson.tracks.some((t) => t.role === "Teacher") && (
+    <TeacherLines
+      transcript={lesson.teacherTranscript}
+      error={lesson.teacherTranscriptError}
+      progress={transcriptAt < 0 ? undefined : transcriptAt ? "waiting" : data?.transcription.progress}
+      transcribe={() => void act(() => post("/api/transcribe", { ids: [lesson.id] }))}
+      load={() => api(`/api/lessons/${lesson.id}/teacher`)}
+      play={(at) => play(at)}
+    />
+  );
 
   /** Plays from at; with until, plays only that span and pauses at its end. */
   function play(at: number, until?: number) {
@@ -442,6 +456,15 @@ function App() {
             {data.status.message} <small>このページを開いたまま振り返りを待てます</small>
           </output>
         )}
+        {transcribing && data && (
+          <output className="notice progress">
+            <span className="pulse" />
+            {transcribing.teacher}先生の発言を書き起こし中（{Math.floor(data.transcription.progress * 100)}%）
+            {data.transcription.queue.length > 1 && (
+              <small>ほか{data.transcription.queue.length - 1}件が順番待ち</small>
+            )}
+          </output>
+        )}
         {data?.automation?.config?.enabled && (
           <div className="notice">
             自動振り返り ON · {data.automation.config.intervalMinutes}分ごとに新しいレッスンを確認 ·
@@ -586,6 +609,7 @@ function App() {
                         </audio>
                       </div>
                     )}
+                    {(lesson.feedback || lesson.teacherTranscript) && teacherLines}
                     {lesson.feedback ? (
                       <>
                         {lesson.feedback.source === "audio_transcript" && (
@@ -685,6 +709,7 @@ function App() {
                             : "このレッスンを振り返る ↗"}
                         </button>
                         <small>音声の長さに応じて、数分かかります。</small>
+                        {!lesson.teacherTranscript && teacherLines}
                       </div>
                     )}
                   </>

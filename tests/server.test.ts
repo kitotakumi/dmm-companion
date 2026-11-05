@@ -124,3 +124,79 @@ test("表現のお気に入りを登録・解除して保存し、不正な番�
   expect((await favorite({ index: 1, favorite: false })).status).toBe(200);
   expect(new Store(root).lesson("test").favorites).toEqual([]);
 });
+
+test("先生の発言の書き起こしは振り返りの途中でも受け付け、1件ずつ進めて失敗を残す", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dmm-server-"));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const store = new Store(root);
+  const recorded = (id: string) => ({
+    id,
+    date: "2026-01-01",
+    teacher: "Teacher",
+    topic: "",
+    attended: true,
+    tracks: [
+      { id: `${id}-teacher`, role: "Teacher" as const, start: "2026-01-01T00:00:00Z", mime: "", chunks: [] },
+    ],
+    phase: "idle" as const,
+    reviewed: [],
+    audio: { file: `audio/${id}.mp3`, seconds: 60, origin: "2026-01-01T00:00:00Z" },
+  });
+  store.merge(recorded("a"));
+  store.merge(recorded("b"));
+  store.merge({ ...recorded("unrestored"), audio: undefined });
+  const finish: (() => void)[] = [];
+  const companion = new Companion(
+    store,
+    "gemini-test",
+    noSavedLogin,
+    "gemini-test",
+    (_, lesson, progress) => {
+      progress(0.5);
+      return new Promise<void>((resolve, reject) => {
+        finish.push(() => {
+          if (lesson.id === "b") return reject(new Error("uvが見つかりません。"));
+          lesson.teacherTranscript = { model: "large-v3-turbo", transcribedAt: "2026-01-01", lines: 1 };
+          resolve();
+        });
+      });
+    },
+  );
+  const { server, url } = serve(companion, 0);
+  cleanups.push(() => {
+    void server.stop(true);
+  });
+  const base = new URL(url);
+  const headers = { "x-companion-token": base.hash.slice(1), "Content-Type": "application/json" };
+  const transcribe = (ids: unknown) =>
+    fetch(`${base.origin}/api/transcribe`, { method: "POST", headers, body: JSON.stringify({ ids }) });
+  const transcription = async () =>
+    ((await (await fetch(`${base.origin}/api/library`, { headers })).json()) as { transcription: unknown })
+      .transcription;
+  const settled = async (calls: number) => {
+    while (finish.length < calls || (calls === 0 && companion.transcription.queue.length)) await Bun.sleep(5);
+  };
+
+  companion.status.busy = true; // a review is being written
+  const response = await transcribe(["a", "b", "unrestored"]);
+  expect(response.status).toBe(202);
+  expect(await response.json()).toEqual({ queued: 2 });
+  expect(await transcription()).toEqual({ queue: ["a", "b"], progress: 0.5 });
+  expect(finish).toHaveLength(1);
+  finish[0]?.();
+  await settled(2);
+  expect(await transcription()).toEqual({ queue: ["b"], progress: 0.5 });
+  finish[1]?.();
+  await settled(0);
+  expect(store.lesson("a").teacherTranscript?.lines).toBe(1);
+  expect(store.lesson("b").teacherTranscriptError).toBe("uvが見つかりません。");
+
+  expect(await (await transcribe(["a"])).json()).toEqual({ queued: 0 });
+  expect(await (await transcribe(["b"])).json()).toEqual({ queued: 1 });
+  expect(store.lesson("b").teacherTranscriptError).toBeUndefined();
+  await settled(3);
+  finish[2]?.();
+  await settled(0);
+  expect((await transcribe("a")).status).toBe(400);
+  expect((await transcribe(["../a"])).status).toBe(400);
+});

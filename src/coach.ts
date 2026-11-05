@@ -10,6 +10,7 @@ import { measureSpeaking } from "./metrics";
 import type { LoginIdentity } from "./prompt";
 import type { SavedLogin } from "./saved-login";
 import { atomicJson, type Store } from "./store";
+import { transcribeTeacher } from "./teacher-transcript";
 import { mapFeedbackProse, withinRecording } from "./timestamps";
 
 export function parseFeedback(stdout: string, seconds: number): Feedback {
@@ -80,6 +81,9 @@ export class Companion {
   private readonly queue: string[] = [];
   private readonly reviewedListeners: ((lesson: Lesson) => void)[] = [];
   status = { busy: false, message: "", error: "" };
+  /** Lessons waiting for a teacher transcript, the first being transcribed, and how far it is (0–1). */
+  readonly transcription = { queue: [] as string[], progress: 0 };
+  private transcribing = false;
   constructor(
     readonly store: Store,
     /** Writes the review from the whole lesson recording. */
@@ -87,6 +91,8 @@ export class Companion {
     private readonly savedLogin: SavedLogin,
     /** Transcribes the learner's voice verbatim for speaking metrics; a fast model is enough. */
     readonly transcriptionModel: string,
+    /** Writes a lesson's teacher transcript; tests replace it to stay off Whisper. */
+    private readonly transcriber = transcribeTeacher,
   ) {}
   async setup(identity: LoginIdentity): Promise<void> {
     if (this.working) throw new Error("現在の処理が終わってからログインしてください。");
@@ -241,6 +247,50 @@ export class Companion {
     } catch (error) {
       lesson.assessmentError = safeError(error);
       this.store.save();
+    }
+  }
+  /**
+   * Queues lessons whose recording is restored for a teacher transcript, and returns how many were added.
+   * Whisper runs on this computer without DMM or Gemini, so transcripts go beside reviews and syncs, one
+   * lesson at a time; an error is kept on the lesson for a retry.
+   */
+  transcribe(ids: string[]): number {
+    let count = 0;
+    for (const lesson of ids.map((id) => this.store.lesson(id))) {
+      if (
+        !lesson.audio ||
+        !lesson.tracks.some((t) => t.role === "Teacher") ||
+        lesson.teacherTranscript ||
+        this.transcription.queue.includes(lesson.id)
+      )
+        continue;
+      delete lesson.teacherTranscriptError;
+      this.transcription.queue.push(lesson.id);
+      count++;
+    }
+    this.store.save();
+    void this.transcribeQueued();
+    return count;
+  }
+  private async transcribeQueued(): Promise<void> {
+    if (this.transcribing) return;
+    this.transcribing = true;
+    try {
+      for (let id = this.transcription.queue[0]; id; id = this.transcription.queue[0]) {
+        const lesson = this.store.lesson(id);
+        this.transcription.progress = 0;
+        try {
+          await this.transcriber(this.store, lesson, (done) => {
+            this.transcription.progress = done;
+          });
+        } catch (error) {
+          lesson.teacherTranscriptError = safeError(error);
+          this.store.save();
+        }
+        this.transcription.queue.shift();
+      }
+    } finally {
+      this.transcribing = false;
     }
   }
   /** Measures lessons that have a recording but no metrics yet (e.g. analyzed before metrics existed). */

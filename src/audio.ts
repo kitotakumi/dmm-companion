@@ -90,7 +90,21 @@ async function mix(inputs: { stream: string; offset: number }[], out: string, sa
   ]);
 }
 
-export async function prepareAudio(store: Store, lesson: Lesson): Promise<void> {
+/** The audio work last started per lesson. Each rewrites the lesson's files under work/, so they take turns. */
+const audioWork = new Map<string, Promise<unknown>>();
+
+/** Runs `work` once the lesson's audio work already started has finished, whether or not it failed. */
+function inTurn<T>(lesson: Lesson, work: () => Promise<T>): Promise<T> {
+  const turn = (audioWork.get(lesson.id) ?? Promise.resolve()).then(work, work);
+  audioWork.set(lesson.id, turn);
+  return turn;
+}
+
+export function prepareAudio(store: Store, lesson: Lesson): Promise<void> {
+  return inTurn(lesson, () => restoreAudio(store, lesson));
+}
+
+async function restoreAudio(store: Store, lesson: Lesson): Promise<void> {
   if (lesson.audio && existsSync(store.path(lesson.audio.file))) return;
   await ensureRecording(store, lesson);
   const alignment = timeline(lesson);
@@ -117,7 +131,11 @@ export async function prepareAudio(store: Store, lesson: Lesson): Promise<void> 
  * One speaker's voice alone (all of their reconnected tracks), on the same timeline as the lesson
  * recording. Rebuilt from chunks on demand, so it lives under work/.
  */
-export async function speakerAudio(store: Store, lesson: Lesson, role: Track["role"]): Promise<string> {
+export function speakerAudio(store: Store, lesson: Lesson, role: Track["role"]): Promise<string> {
+  return inTurn(lesson, () => mixSpeaker(store, lesson, role));
+}
+
+async function mixSpeaker(store: Store, lesson: Lesson, role: Track["role"]): Promise<string> {
   const file = store.path("work", lesson.id, `${role.toLowerCase()}.mp3`);
   if (existsSync(file)) return file;
   await ensureRecording(store, lesson);
