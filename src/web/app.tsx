@@ -149,7 +149,7 @@ function App() {
           .toLowerCase()
           .includes(query.toLowerCase()),
     );
-  const teacherLines = lesson?.audio && lesson.tracks.some((t) => t.role === "Teacher") && (
+  const teacherLines = lesson?.tracks.some((t) => t.role === "Teacher") && (
     <TeacherLines
       transcript={lesson.teacherTranscript}
       error={lesson.teacherTranscriptError}

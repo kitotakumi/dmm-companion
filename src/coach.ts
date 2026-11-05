@@ -250,15 +250,14 @@ export class Companion {
     }
   }
   /**
-   * Queues lessons whose recording is restored for a teacher transcript, and returns how many were added.
-   * Whisper runs on this computer without DMM or Gemini, so transcripts go beside reviews and syncs, one
-   * lesson at a time; an error is kept on the lesson for a retry.
+   * Queues lessons with a teacher recording for a teacher transcript, and returns how many were added.
+   * Whisper runs on this computer without Gemini, so transcripts go beside reviews and syncs, one lesson
+   * at a time; an error is kept on the lesson for a retry.
    */
   transcribe(ids: string[]): number {
     let count = 0;
     for (const lesson of ids.map((id) => this.store.lesson(id))) {
       if (
-        !lesson.audio ||
         !lesson.tracks.some((t) => t.role === "Teacher") ||
         lesson.teacherTranscript ||
         this.transcription.queue.includes(lesson.id)
@@ -280,6 +279,8 @@ export class Companion {
         const lesson = this.store.lesson(id);
         this.transcription.progress = 0;
         try {
+          // The lines play from the lesson recording, so it is restored first when no review has done so.
+          if (!lesson.audio) await this.signedIn(() => prepareAudio(this.store, lesson));
           await this.transcriber(this.store, lesson, (done) => {
             this.transcription.progress = done;
           });
