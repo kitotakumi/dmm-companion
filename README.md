@@ -2,6 +2,53 @@
 
 DMM英会話の録音から、言い換え・復習表現・次のレッスンで使う練習文を作るローカルアプリです。Bunでコンパイルした`dmm`にサーバーとReactの振り返りページを同梱します。
 
+## セットアップ（Windows）
+
+PowerShellで実行します。
+
+1. 必要なツールを入れて、PowerShellを開き直します。
+
+   ```powershell
+   winget install --id Git.Git -e
+   winget install --id Oven-sh.Bun -e
+   winget install --id Gyan.FFmpeg -e
+   winget install --id Google.AntigravityCLI -e
+   ```
+
+2. `agy`を引数なしで起動し、Googleアカウントでサインインします。終わったら閉じてかまいません。
+3. ビルドして`%USERPROFILE%\.local\bin`に置きます。
+
+   ```powershell
+   git clone https://github.com/kitotakumi/dmm-companion.git
+   cd dmm-companion
+   bun install
+   bun run build
+   $bin = "$env:USERPROFILE\.local\bin"
+   New-Item -ItemType Directory -Force $bin | Out-Null
+   Copy-Item dist\dmm.exe $bin
+   ```
+
+   初回だけ、このフォルダをPATHに加えます。
+
+   ```powershell
+   [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$bin", "User")
+   ```
+
+4. PowerShellを開き直し、DMMにログインしてから起動します。
+
+   ```powershell
+   dmm setup   # DMMのメールアドレスとパスワードを入力（パスワードは表示されません）
+   dmm         # 振り返りページがブラウザで開きます
+   ```
+
+5. 先生の発言の書き起こしを使う場合だけ、uvも入れます。なくても振り返りなどほかの機能は使えます。初回の書き起こしでは、PythonのパッケージとWhisperのモデル（約1.6GB）をダウンロードします。
+
+   ```powershell
+   winget install --id astral-sh.uv -e
+   ```
+
+`dmm`はPowerShellを閉じると止まります。ウィンドウを残さずに動かすときは`Start-Process dmm -WindowStyle Hidden`で起動し、`taskkill /IM dmm.exe /T /F`で止めます。起動中にもう一度`dmm`を実行すると、動いているアプリのページを開きます。`dmm auto`（自動生成・Mac通知）はmacOS専用です。
+
 ## 使い方
 
 ```sh
