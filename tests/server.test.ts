@@ -129,15 +129,13 @@ test("先生の発言の書き起こしは振り返りの途中でも受け付�
   const root = mkdtempSync(join(tmpdir(), "dmm-server-"));
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   const store = new Store(root);
-  const recorded = (id: string) => ({
+  const recorded = (id: string, role: "Teacher" | "Student" = "Teacher") => ({
     id,
     date: "2026-01-01",
     teacher: "Teacher",
     topic: "",
     attended: true,
-    tracks: [
-      { id: `${id}-teacher`, role: "Teacher" as const, start: "2026-01-01T00:00:00Z", mime: "", chunks: [] },
-    ],
+    tracks: [{ id: `${id}-${role}`, role, start: "2026-01-01T00:00:00Z", mime: "", chunks: [] }],
     phase: "idle" as const,
     reviewed: [],
     audio: { file: `audio/${id}.mp3`, seconds: 60, origin: "2026-01-01T00:00:00Z" },
@@ -145,6 +143,7 @@ test("先生の発言の書き起こしは振り返りの途中でも受け付�
   store.merge(recorded("a"));
   store.merge(recorded("b"));
   store.merge({ ...recorded("unrestored"), audio: undefined });
+  store.merge(recorded("learner", "Student"));
   const finish: (() => void)[] = [];
   const companion = new Companion(
     store,
@@ -178,18 +177,21 @@ test("先生の発言の書き起こしは振り返りの途中でも受け付�
   };
 
   companion.status.busy = true; // a review is being written
-  const response = await transcribe(["a", "b", "unrestored"]);
+  const response = await transcribe(["a", "b", "unrestored", "learner"]);
   expect(response.status).toBe(202);
-  expect(await response.json()).toEqual({ queued: 2 });
-  expect(await transcription()).toEqual({ queue: ["a", "b"], progress: 0.5 });
+  expect(await response.json()).toEqual({ queued: 3 });
+  expect(await transcription()).toEqual({ queue: ["a", "b", "unrestored"], progress: 0.5 });
   expect(finish).toHaveLength(1);
   finish[0]?.();
   await settled(2);
-  expect(await transcription()).toEqual({ queue: ["b"], progress: 0.5 });
+  expect(await transcription()).toEqual({ queue: ["b", "unrestored"], progress: 0.5 });
   finish[1]?.();
   await settled(0);
   expect(store.lesson("a").teacherTranscript?.lines).toBe(1);
   expect(store.lesson("b").teacherTranscriptError).toBe("uvが見つかりません。");
+  // A recording no review has restored is restored before Whisper; this one cannot be, so Whisper never starts.
+  expect(store.lesson("unrestored").teacherTranscriptError).toBeDefined();
+  expect(finish).toHaveLength(2);
 
   expect(await (await transcribe(["a"])).json()).toEqual({ queued: 0 });
   expect(await (await transcribe(["b"])).json()).toEqual({ queued: 1 });
