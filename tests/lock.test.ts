@@ -27,7 +27,7 @@ test("PID reused by a process started after the lock was written is stale", () =
 });
 
 test("lock of an exited process is stale", async () => {
-  const child = Bun.spawn(["true"]);
+  const child = Bun.spawn([process.execPath, "-e", ""]);
   await child.exited;
   expect(liveLockHolder(lockFile(child.pid, new Date()), child.pid)).toBeUndefined();
 });

@@ -13,7 +13,7 @@ import { importHar } from "./importer";
 import { liveLockHolder } from "./lock";
 import { diagnoseMacNotifications } from "./notifications";
 import { hiddenInput, promptIdentity } from "./prompt";
-import { KeychainLogin } from "./saved-login";
+import { savedLoginFor } from "./saved-login";
 import { serve } from "./server";
 import { disableSlackDelivery, enableSlackDelivery, SlackReviewPost } from "./slack";
 import { atomicJson, Store } from "./store";
@@ -38,7 +38,8 @@ if (values.help) {
   console.log(`dmm — DMM英会話の振り返りノート
 
   dmm setup                     DMMにログインして資格情報をローカルに保存
-                                (パスワードはキーチェーンに保存し、認証切れ時に自動で再ログイン)
+                                (パスワードはmacOSはキーチェーン、WindowsはDPAPIで暗号化して保存し、
+                                 認証切れ時に自動で再ログイン)
   dmm                           振り返りページを開く・履歴と録音一覧を同期
   dmm sync                      新しい履歴と録音一覧を同期
   dmm sync --full               全月を取り直す
@@ -72,15 +73,20 @@ if (values.help) {
 }
 
 function openPage(url: string): void {
-  const opener =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
-  if (Bun.which(opener)) Bun.spawn([opener, url], { stdout: "ignore", stderr: "ignore" });
+  // explorer.exe opens the Documents folder for this URL; FileProtocolHandler hands it, fragment included, to the browser.
+  const command =
+    process.platform === "darwin"
+      ? ["open", url]
+      : process.platform === "win32"
+        ? ["rundll32.exe", "url.dll,FileProtocolHandler", url]
+        : ["xdg-open", url];
+  if (Bun.which(command[0] ?? "")) Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
 }
 
 function reportSavedLogin(root: string): void {
   console.log(
-    new KeychainLogin(root).available
-      ? "パスワードをキーチェーンに保存しました。認証が切れたら自動で再ログインします。"
+    savedLoginFor(root).available
+      ? `パスワードを${process.platform === "win32" ? "暗号化して保存" : "キーチェーンに保存"}しました。認証が切れたら自動で再ログインします。`
       : "このOSではパスワードを保存しません。認証が切れたらdmm setupを再実行してください。",
   );
 }
@@ -253,7 +259,7 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => process.exit(130));
   process.on("SIGTERM", () => process.exit(143));
   const store = new Store(root);
-  const companion = new Companion(store, values.model, new KeychainLogin(root), transcriptionModel);
+  const companion = new Companion(store, values.model, savedLoginFor(root), transcriptionModel);
   const automatic = new AutomaticReviews(store, companion, new MacReviewDelivery(store, process.execPath), [
     new GmailReviewMail(store),
     new SlackReviewPost(store),

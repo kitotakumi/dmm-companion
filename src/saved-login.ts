@@ -1,6 +1,7 @@
-import { resolve } from "node:path";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { LoginIdentity } from "./prompt";
-import { hash } from "./store";
+import { atomicJson, hash } from "./store";
 
 /** The password entered at dmm setup, kept so an expired session can sign in again without the user. */
 export type SavedLogin = {
@@ -64,4 +65,71 @@ export class KeychainLogin implements SavedLogin {
     ]);
     return { exitCode, stdout, stderr };
   }
+}
+
+/**
+ * Windows: a file in the data directory, encrypted with DPAPI so only this Windows user on this
+ * machine can decrypt it. The secret passes through stdin as base64, never through argv.
+ */
+export class DpapiLogin implements SavedLogin {
+  readonly available = process.platform === "win32";
+  private readonly file: string;
+  private readonly entropy: string;
+  constructor(root: string) {
+    this.file = join(resolve(root), "saved-login.json");
+    this.entropy = `com.dmm-companion.login.${hash(resolve(root)).slice(0, 12)}`;
+  }
+  async remember(identity: LoginIdentity): Promise<void> {
+    const sealed = await this.dpapi(
+      "Protect",
+      Buffer.from(JSON.stringify(identity), "utf8").toString("base64"),
+    );
+    atomicJson(this.file, { version: 1, sealed });
+  }
+  async recall(): Promise<LoginIdentity | undefined> {
+    if (!existsSync(this.file)) return undefined;
+    const { sealed } = JSON.parse(readFileSync(this.file, "utf8")) as { sealed?: string };
+    if (!sealed) throw new Error("保存済みのログイン情報を読めません。");
+    const plain = await this.dpapi("Unprotect", sealed);
+    return JSON.parse(Buffer.from(plain, "base64").toString("utf8")) as LoginIdentity;
+  }
+  async forget(): Promise<void> {
+    rmSync(this.file, { force: true });
+  }
+  private async dpapi(operation: "Protect" | "Unprotect", base64: string): Promise<string> {
+    if (!this.available) throw new Error("DPAPIによるパスワードの保存はWindowsでのみ利用できます。");
+    const script = [
+      "Add-Type -AssemblyName System.Security",
+      "$data = [Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())",
+      `$entropy = [Text.Encoding]::UTF8.GetBytes('${this.entropy}')`,
+      `[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::${operation}($data, $entropy, 'CurrentUser'))`,
+    ].join("\n");
+    const child = Bun.spawn(
+      [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(script, "utf16le").toString("base64"),
+      ],
+      { stdin: new TextEncoder().encode(base64), stdout: "pipe", stderr: "pipe" },
+    );
+    const [exitCode, stdout] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    if (exitCode !== 0 || !stdout.trim())
+      throw new Error(
+        operation === "Protect"
+          ? "パスワードを暗号化して保存できませんでした。"
+          : "保存済みのパスワードを復号できません。dmm setupを再実行してください。",
+      );
+    return stdout.trim();
+  }
+}
+
+/** Where this OS keeps the password; on other OSes the store is unavailable. */
+export function savedLoginFor(root: string): SavedLogin {
+  return process.platform === "win32" ? new DpapiLogin(root) : new KeychainLogin(root);
 }

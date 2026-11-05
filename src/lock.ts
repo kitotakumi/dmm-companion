@@ -8,7 +8,19 @@ function elapsedSeconds(etime: string): number {
   return Number(days) * 86400 + hours * 3600 + minutes * 60 + seconds;
 }
 
+/** Windows has no ps; Get-Process reports the start time itself. */
+function windowsProcessStartedAt(pid: number): number | undefined {
+  const script = `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`;
+  const result = Bun.spawnSync(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], {
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  const startedAt = Date.parse(result.stdout.toString().trim());
+  return result.exitCode === 0 && Number.isFinite(startedAt) ? startedAt : undefined;
+}
+
 function processStartedAt(pid: number): number | undefined {
+  if (process.platform === "win32") return windowsProcessStartedAt(pid);
   const result = Bun.spawnSync(["ps", "-o", "etime=", "-p", String(pid)], {
     stdout: "pipe",
     stderr: "ignore",

@@ -2,6 +2,53 @@
 
 DMM英会話の録音から、言い換え・復習表現・次のレッスンで使う練習文を作るローカルアプリです。Bunでコンパイルした`dmm`にサーバーとReactの振り返りページを同梱します。
 
+## セットアップ（Windows）
+
+PowerShellで実行します。
+
+1. 必要なツールを入れて、PowerShellを開き直します。
+
+   ```powershell
+   winget install --id Git.Git -e
+   winget install --id Oven-sh.Bun -e
+   winget install --id Gyan.FFmpeg -e
+   winget install --id Google.AntigravityCLI -e
+   ```
+
+2. `agy`を引数なしで起動し、Googleアカウントでサインインします。終わったら閉じてかまいません。
+3. ビルドして`%USERPROFILE%\.local\bin`に置きます。
+
+   ```powershell
+   git clone https://github.com/kitotakumi/dmm-companion.git
+   cd dmm-companion
+   bun install
+   bun run build
+   $bin = "$env:USERPROFILE\.local\bin"
+   New-Item -ItemType Directory -Force $bin | Out-Null
+   Copy-Item dist\dmm.exe $bin
+   ```
+
+   初回だけ、このフォルダをPATHに加えます。
+
+   ```powershell
+   [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$bin", "User")
+   ```
+
+4. PowerShellを開き直し、DMMにログインしてから起動します。
+
+   ```powershell
+   dmm setup   # DMMのメールアドレスとパスワードを入力（パスワードは表示されません）
+   dmm         # 振り返りページがブラウザで開きます
+   ```
+
+5. 先生の発言の書き起こしを使う場合だけ、uvも入れます。なくても振り返りなどほかの機能は使えます。初回の書き起こしでは、PythonのパッケージとWhisperのモデル（約1.6GB）をダウンロードします。
+
+   ```powershell
+   winget install --id astral-sh.uv -e
+   ```
+
+`dmm`はPowerShellを閉じると止まります。ウィンドウを残さずに動かすときは`Start-Process dmm -WindowStyle Hidden`で起動し、`taskkill /IM dmm.exe /T /F`で止めます。起動中にもう一度`dmm`を実行すると、動いているアプリのページを開きます。`dmm auto`（自動生成・Mac通知）はmacOS専用です。
+
 ## 使い方
 
 ```sh
@@ -16,7 +63,7 @@ dmm
 
 再設定時も入力したパスワードで認証するため、前回のセッションは使わず毎回新しく認証します。
 
-`dmm`は振り返りページを開き、保存済みセッションで全月の履歴と録音の有無を同期します。「このレッスンを振り返る」または一括分析ボタンで、必要な録音をダウンロードしてGeminiによる分析を開始できます。表現ノートでは検索と復習済みの記録ができます。
+`dmm`は振り返りページを開き、保存済みセッションで全月の履歴と録音の有無を同期します。「このレッスンを振り返る」または一括分析ボタンで、必要な録音をダウンロードしてGeminiによる分析を開始できます。「先生の発言を時刻つきで書き起こす」では、このPCのWhisperで先生の発言を書き起こします。表現ノートでは検索、復習済みの記録、お気に入り登録ができます。
 
 ```sh
 dmm sync                 # 新しい履歴・録音一覧の同期
@@ -89,9 +136,11 @@ dmm auto slack off   # Slack配信を停止する
 
 - `agy`: ログイン済みのCLI。振り返りとCEFR判定は`--model`（既定 `gemini-3.8-flash-high`）、発話の書き起こしは`--transcribe-model`（既定 `gemini-3.8-flash-low`）で実行します。
 - `ffmpeg` / `ffprobe`: 話者ごとに分かれた録音の復元と時刻合わせ。
+- `uv`: 先生の発言の書き起こしを使う場合のみ。`scripts/transcribe-dialogue.py`を実行し、初回にfaster-whisperとWhisperのモデル（large-v3-turbo、約1.6GB）をダウンロードします。
 
 ```sh
 brew install ffmpeg
+brew install uv  # 先生の発言の書き起こしを使う場合
 ```
 
 アプリ実行時にBun・Node.js・node_modulesは不要です。上の外部ツールは別途必要です。フォントをオンライン取得できない場合はローカルフォントで表示します。
@@ -116,7 +165,8 @@ install -m 755 dist/dmm ~/.local/bin/dmm
 | パス | 内容 |
 | --- | --- |
 | `credentials.json` | メールアドレスとログインセッション。パスワードは保存しません |
-| `library.json` | 履歴・分析結果・復習済みの記録 |
+| `saved-login.json` | Windowsのみ。自動再ログイン用のメールアドレスとパスワード。DPAPIで暗号化し、同じWindowsユーザーでのみ復号できます（macOSはキーチェーンに保存） |
+| `library.json` | 履歴・分析結果・復習済みとお気に入りの記録 |
 | `manifest.json` | 取得日時・条件・取得月・件数 |
 | `sources/` | 取得した履歴・録音メタデータ |
 | `chunks/` | 録音の元データ。署名URL更新後も再利用 |
@@ -133,6 +183,14 @@ install -m 755 dist/dmm ~/.local/bin/dmm
 CEFRの目安は、振り返りとは別にGeminiへ録音を聞かせて、話し言葉の6観点（表現の幅・正確さ・流暢さ・やりとり・まとまり・発音）ごとに判定します。観点ごとに根拠となる発話を時刻つきで先に書き出させ、Companion Volumeの記述子の要約と照らしてレベルを決めさせます。1回の会話からの推定なので、成長の記録では直近4回の平均で見ます。
 
 発話の計測は、講師と受講者で分かれた録音トラックを使います。ffmpegの無音検出（0.25秒以上をポーズ）から話した割合・発言の長さを、受講者トラックの逐語書き起こしから話す速さ・途切れずに言えた語数（MLR）・語彙の多様さ（MATTR）・uh/umの頻度を計算します。書き起こしは`analyses/<id>.learner.json`に保存し、再計算ではGeminiを呼び直しません。
+
+リスニングの復習用に、講師トラックをこのPCのWhisper（faster-whisperのlarge-v3-turbo。CPUで実行）で書き起こします。Whisperが単語ごとに音声上の時刻を求めるので、文の終わりと0.8秒以上の間で行を区切り、行の最初の単語の時刻をその行の話し始めにします。句読点のない書き起こしにならないよう、Whisperには句読点つきの短い例文を渡します。講師トラックはレッスンの録音と同じ時間軸なので、時刻を押すとその少し前から録音を再生できます。録音を準備したレッスンで、振り返りページの「先生の発言を時刻つきで書き起こす」から実行します。DMMにもGeminiにも接続しないため、振り返りの分析中や同期中にも進められます。書き起こしは1件ずつ順番に処理し、結果は`analyses/<id>.teacher.json`に保存します。CPUだけのノートPC（Ryzen 5 7530U、電源接続時）では、25分のレッスン1件に約10分かかります。
+
+`scripts/transcribe-dialogue.py`は単体でも使えます。1人1ファイルで録音した会話を話者ごとに書き起こし、全員の行を時刻順に並べてJSONに書き出します。
+
+```sh
+uv run scripts/transcribe-dialogue.py --track Teacher=teacher.mp3 --track Student=student.mp3 --out dialogue.json
+```
 
 音声判定の妥当性は`scripts/benchmarks/`で検証できます（speechocean762の専門家スコアとの相関。`--backend vertex`でVertex AIからも実行可能）。
 
@@ -154,6 +212,7 @@ bun run dev -- --no-open
 - `src/coach.ts`: Gemini分析・キュー・失敗の管理
 - `src/assessment.ts`, `src/cefr.ts`: CEFRの観点別判定
 - `src/metrics.ts`: 発話区間・書き起こしからの発話指標
+- `src/teacher-transcript.ts`, `scripts/transcribe-dialogue.py`: Whisperによる講師の発言の時刻つき書き起こし
 - `src/gemini.ts`: agy経由のGemini呼び出しと回答の取り出し
 - `src/store.ts`: 永続化と中断後の復旧
 - `src/server.ts`, `src/web/`: localhost限定のAPIと振り返りページ

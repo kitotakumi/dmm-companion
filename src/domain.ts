@@ -78,11 +78,17 @@ export type Lesson = {
   assessment?: Assessment & { model: string; assessedAt: string };
   /** Why judging the CEFR estimate failed; the review itself is unaffected. */
   assessmentError?: string;
+  /** The teacher's lines with start times, kept in analyses/<id>.teacher.json; here only their count. */
+  teacherTranscript?: { model: string; transcribedAt: string; lines: number };
+  /** Why transcribing the teacher failed; the review itself is unaffected. */
+  teacherTranscriptError?: string;
   analyzedAt?: string;
   recordingCheckedAt?: string;
   recordingUnavailable?: boolean;
   model?: string;
   reviewed: number[];
+  /** Expressions the learner starred, by index into feedback.expressions. */
+  favorites?: number[];
 };
 export type ImportRecord = {
   name: string;

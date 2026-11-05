@@ -48,6 +48,7 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
                 audio: l.audio ? { seconds: l.audio.seconds } : undefined,
               })),
               status: companion.status,
+              transcription: companion.transcription,
               model: companion.model,
               dataDir: store.root,
               canSync: Boolean(store.credentials().dmmCookie),
@@ -96,6 +97,16 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
           );
           return Response.json({ ok: true }, { status: 202 });
         }
+        // Transcribing runs on this computer beside reviews and syncs, so it is accepted while they run.
+        if (url.pathname === "/api/transcribe" && request.method === "POST") {
+          const body = (await request.json()) as { ids?: unknown };
+          if (
+            !Array.isArray(body.ids) ||
+            !body.ids.every((id) => typeof id === "string" && /^[\w-]+$/.test(id))
+          )
+            return Response.json({ error: "idsが不正です。" }, { status: 400 });
+          return Response.json({ queued: companion.transcribe(body.ids) }, { status: 202 });
+        }
         if (url.pathname === "/api/analyze" && request.method === "POST") {
           const body: unknown = await request.json();
           if (
@@ -116,6 +127,14 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
           const saved = (await file.json()) as { transcript: string; model: string };
           return Response.json({ transcript: saved.transcript, model: saved.model });
         }
+        const teacher = /^\/api\/lessons\/([\w-]+)\/teacher$/.exec(url.pathname);
+        if (teacher?.[1] && request.method === "GET") {
+          const file = Bun.file(store.path("analyses", `${store.lesson(teacher[1]).id}.teacher.json`));
+          if (!(await file.exists()))
+            return Response.json({ error: "先生の発言の書き起こしがありません。" }, { status: 404 });
+          const saved = (await file.json()) as { lines: unknown; model: string };
+          return Response.json({ lines: saved.lines, model: saved.model });
+        }
         const review = /^\/api\/lessons\/([\w-]+)\/review$/.exec(url.pathname);
         if (review?.[1] && request.method === "POST") {
           const lesson = store.lesson(review[1]);
@@ -131,6 +150,25 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
           lesson.reviewed = body.reviewed
             ? [...new Set([...lesson.reviewed, body.index])]
             : lesson.reviewed.filter((i) => i !== body.index);
+          store.save();
+          return Response.json({ ok: true });
+        }
+        const favorite = /^\/api\/lessons\/([\w-]+)\/favorite$/.exec(url.pathname);
+        if (favorite?.[1] && request.method === "POST") {
+          const lesson = store.lesson(favorite[1]);
+          const body = (await request.json()) as { index?: number; favorite?: boolean };
+          if (
+            !Number.isInteger(body.index) ||
+            body.index === undefined ||
+            body.index < 0 ||
+            body.index >= (lesson.feedback?.expressions.length ?? 0) ||
+            typeof body.favorite !== "boolean"
+          )
+            return Response.json({ error: "お気に入りの項目が不正です。" }, { status: 400 });
+          const favorites = lesson.favorites ?? [];
+          lesson.favorites = body.favorite
+            ? [...new Set([...favorites, body.index])]
+            : favorites.filter((i) => i !== body.index);
           store.save();
           return Response.json({ ok: true });
         }
@@ -180,6 +218,7 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
                 teacher: l.teacher,
                 feedback: l.feedback,
                 reviewed: l.reviewed,
+                favorites: l.favorites ?? [],
               })),
             },
             {

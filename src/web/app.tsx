@@ -5,6 +5,7 @@ import { slackShareText } from "../share";
 import { clock, span, timedSegments } from "../timestamps";
 import { LessonAssessment } from "./assessment";
 import { Growth } from "./growth";
+import { TeacherLines } from "./listening";
 import { LessonSpeaking } from "./speaking";
 import { NativeExamples } from "./youglish";
 
@@ -15,6 +16,7 @@ type ViewLesson = Omit<Lesson, "tracks" | "audio"> & {
 type Snapshot = Omit<Library, "lessons"> & {
   lessons: ViewLesson[];
   status: { busy: boolean; message: string; error: string };
+  transcription: { queue: string[]; progress: number };
   model: string;
   dataDir: string;
   canSync: boolean;
@@ -81,6 +83,7 @@ function App() {
   const [help, setHelp] = useState(false);
   const [copied, setCopied] = useState("");
   const [showLearned, setShowLearned] = useState(false);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const audio = useRef<HTMLAudioElement>(null);
   const stopAt = useRef<number | null>(null);
   // One native-example player at a time: which card and which word.
@@ -114,8 +117,11 @@ function App() {
   const lesson = lessons.find((l) => l.id === selected);
   const reviewed = lessons.reduce((sum, l) => sum + l.reviewed.length, 0);
   const expressionCount = lessons.reduce((sum, l) => sum + (l.feedback?.expressions.length ?? 0), 0);
+  const favoriteCount = lessons.reduce((sum, l) => sum + (l.favorites?.length ?? 0), 0);
   const analyzed = lessons.filter((l) => l.feedback).length;
   const busy = Boolean(data?.status.busy);
+  const transcribing = lessons.find((l) => l.id === data?.transcription.queue[0]);
+  const transcriptAt = lesson ? (data?.transcription.queue.indexOf(lesson.id) ?? -1) : -1;
   const months = [
     ...new Set(
       lessons.map((l) =>
@@ -135,11 +141,24 @@ function App() {
     .flatMap((l) => (l.feedback?.expressions ?? []).map((expression, index) => ({ l, expression, index })))
     .filter(
       ({ l, expression, index }) =>
-        (showLearned || !l.reviewed.includes(index)) &&
+        // Favorites stay listed after they are reviewed.
+        (favoritesOnly
+          ? Boolean(l.favorites?.includes(index))
+          : showLearned || !l.reviewed.includes(index)) &&
         `${expression.original} ${expression.improved} ${expression.meaning}`
           .toLowerCase()
           .includes(query.toLowerCase()),
     );
+  const teacherLines = lesson?.audio && lesson.tracks.some((t) => t.role === "Teacher") && (
+    <TeacherLines
+      transcript={lesson.teacherTranscript}
+      error={lesson.teacherTranscriptError}
+      progress={transcriptAt < 0 ? undefined : transcriptAt ? "waiting" : data?.transcription.progress}
+      transcribe={() => void act(() => post("/api/transcribe", { ids: [lesson.id] }))}
+      load={() => api(`/api/lessons/${lesson.id}/teacher`)}
+      play={(at) => play(at)}
+    />
+  );
 
   /** Plays from at; with until, plays only that span and pauses at its end. */
   function play(at: number, until?: number) {
@@ -168,6 +187,7 @@ function App() {
     const expression = l.feedback?.expressions[index];
     if (!expression) return null;
     const learned = l.reviewed.includes(index);
+    const favorite = Boolean(l.favorites?.includes(index));
     const card = `${l.id}-${index}`;
     return (
       <article className={`expression ${learned ? "learned" : ""}`} key={card}>
@@ -181,29 +201,43 @@ function App() {
                   ? "DID YOU CATCH THIS?"
                   : "KEEP THIS PHRASE"}
           </span>
-          {tab === "lessons" && expression.at !== null ? (
+          <span className="expression-actions">
+            {tab === "lessons" && expression.at !== null ? (
+              <button
+                className="timestamp"
+                type="button"
+                onClick={() => {
+                  if (expression.at !== null) play(expression.at);
+                }}
+              >
+                ▷ {clock(expression.at)}
+              </button>
+            ) : tab === "phrases" ? (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => {
+                  setSelected(l.id);
+                  setTab("lessons");
+                  setQuery("");
+                }}
+              >
+                {l.teacher} · {dateParts(l.date).month} {dateParts(l.date).day} ↗
+              </button>
+            ) : null}
             <button
-              className="timestamp"
+              className={`favorite-button ${favorite ? "on" : ""}`}
               type="button"
-              onClick={() => {
-                if (expression.at !== null) play(expression.at);
-              }}
+              aria-label="お気に入り"
+              aria-pressed={favorite}
+              title={favorite ? "お気に入りから外す" : "お気に入りに追加"}
+              onClick={() =>
+                void act(() => post(`/api/lessons/${l.id}/favorite`, { index, favorite: !favorite }))
+              }
             >
-              ▷ {clock(expression.at)}
+              {favorite ? "★" : "☆"}
             </button>
-          ) : tab === "phrases" ? (
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => {
-                setSelected(l.id);
-                setTab("lessons");
-                setQuery("");
-              }}
-            >
-              {l.teacher} · {dateParts(l.date).month} {dateParts(l.date).day} ↗
-            </button>
-          ) : null}
+          </span>
         </div>
         <p className="original">“{expression.original}”</p>
         <div className="rewrite">
@@ -422,6 +456,15 @@ function App() {
             {data.status.message} <small>このページを開いたまま振り返りを待てます</small>
           </output>
         )}
+        {transcribing && data && (
+          <output className="notice progress">
+            <span className="pulse" />
+            {transcribing.teacher}先生の発言を書き起こし中（{Math.floor(data.transcription.progress * 100)}%）
+            {data.transcription.queue.length > 1 && (
+              <small>ほか{data.transcription.queue.length - 1}件が順番待ち</small>
+            )}
+          </output>
+        )}
         {data?.automation?.config?.enabled && (
           <div className="notice">
             自動振り返り ON · {data.automation.config.intervalMinutes}分ごとに新しいレッスンを確認 ·
@@ -566,6 +609,7 @@ function App() {
                         </audio>
                       </div>
                     )}
+                    {(lesson.feedback || lesson.teacherTranscript) && teacherLines}
                     {lesson.feedback ? (
                       <>
                         {lesson.feedback.source === "audio_transcript" && (
@@ -665,6 +709,7 @@ function App() {
                             : "このレッスンを振り返る ↗"}
                         </button>
                         <small>音声の長さに応じて、数分かかります。</small>
+                        {!lesson.teacherTranscript && teacherLines}
                       </div>
                     )}
                   </>
@@ -704,14 +749,25 @@ function App() {
               <h2>
                 Phrase collection <span>{cards.length} expressions</span>
               </h2>
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={showLearned}
-                  onChange={(e) => setShowLearned(e.target.checked)}
-                />
-                復習済みも表示
-              </label>
+              <div className="phrase-filters">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={favoritesOnly}
+                    onChange={(e) => setFavoritesOnly(e.target.checked)}
+                  />
+                  ★ お気に入りのみ（{favoriteCount}）
+                </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={showLearned || favoritesOnly}
+                    disabled={favoritesOnly}
+                    onChange={(e) => setShowLearned(e.target.checked)}
+                  />
+                  復習済みも表示
+                </label>
+              </div>
             </div>
             <input
               className="phrase-search"
@@ -724,12 +780,22 @@ function App() {
             {!cards.length && (
               <div className="reflection-empty">
                 <h3>
-                  {expressionCount ? "復習する表現はありません。" : "ここに、あなたの表現が集まります。"}
+                  {!expressionCount
+                    ? "ここに、あなたの表現が集まります。"
+                    : !favoritesOnly
+                      ? "復習する表現はありません。"
+                      : favoriteCount
+                        ? "一致するお気に入りはありません。"
+                        : "お気に入りの表現はまだありません。"}
                 </h3>
                 <p>
-                  {expressionCount
-                    ? "復習済みの表示や検索条件を変えてみてください。"
-                    : "レッスンを分析すると、復習したい表現がこのノートに追加されます。"}
+                  {!expressionCount
+                    ? "レッスンを分析すると、復習したい表現がこのノートに追加されます。"
+                    : !favoritesOnly
+                      ? "復習済みの表示や検索条件を変えてみてください。"
+                      : favoriteCount
+                        ? "検索条件を変えてみてください。"
+                        : "表現カードの ☆ を押すと、ここに集まります。"}
                 </p>
               </div>
             )}
