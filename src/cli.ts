@@ -73,9 +73,14 @@ if (values.help) {
 }
 
 function openPage(url: string): void {
-  const opener =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
-  if (Bun.which(opener)) Bun.spawn([opener, url], { stdout: "ignore", stderr: "ignore" });
+  // explorer.exe opens the Documents folder for this URL; FileProtocolHandler hands it, fragment included, to the browser.
+  const command =
+    process.platform === "darwin"
+      ? ["open", url]
+      : process.platform === "win32"
+        ? ["rundll32.exe", "url.dll,FileProtocolHandler", url]
+        : ["xdg-open", url];
+  if (Bun.which(command[0] ?? "")) Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
 }
 
 function reportSavedLogin(root: string): void {
