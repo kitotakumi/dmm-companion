@@ -66,6 +66,7 @@ export async function listenWithGemini(store: Store, lesson: Lesson, model: stri
   });
   lesson.feedback = feedback;
   lesson.reviewed = [];
+  lesson.favorites = [];
   lesson.model = model;
   lesson.analyzedAt = new Date().toISOString();
   store.save();

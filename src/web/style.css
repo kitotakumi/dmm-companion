@@ -624,6 +624,23 @@ audio::-webkit-media-controls-panel {
   color: #9ca88e;
   letter-spacing: 1.4px;
 }
+.expression-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.favorite-button {
+  border: 0;
+  background: transparent;
+  color: #b8bfab;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px;
+}
+.favorite-button:hover,
+.favorite-button.on {
+  color: var(--accent);
+}
 .timestamp {
   font-size: 10px;
   color: #8a937c;
@@ -915,6 +932,15 @@ audio::-webkit-media-controls-panel {
 }
 .checkbox input {
   accent-color: var(--green);
+}
+.checkbox:has(input:disabled) {
+  opacity: 0.55;
+}
+.phrase-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
 }
 footer {
   display: flex;

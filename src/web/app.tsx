@@ -81,6 +81,7 @@ function App() {
   const [help, setHelp] = useState(false);
   const [copied, setCopied] = useState("");
   const [showLearned, setShowLearned] = useState(false);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const audio = useRef<HTMLAudioElement>(null);
   const stopAt = useRef<number | null>(null);
   // One native-example player at a time: which card and which word.
@@ -114,6 +115,7 @@ function App() {
   const lesson = lessons.find((l) => l.id === selected);
   const reviewed = lessons.reduce((sum, l) => sum + l.reviewed.length, 0);
   const expressionCount = lessons.reduce((sum, l) => sum + (l.feedback?.expressions.length ?? 0), 0);
+  const favoriteCount = lessons.reduce((sum, l) => sum + (l.favorites?.length ?? 0), 0);
   const analyzed = lessons.filter((l) => l.feedback).length;
   const busy = Boolean(data?.status.busy);
   const months = [
@@ -135,7 +137,10 @@ function App() {
     .flatMap((l) => (l.feedback?.expressions ?? []).map((expression, index) => ({ l, expression, index })))
     .filter(
       ({ l, expression, index }) =>
-        (showLearned || !l.reviewed.includes(index)) &&
+        // Favorites stay listed after they are reviewed.
+        (favoritesOnly
+          ? Boolean(l.favorites?.includes(index))
+          : showLearned || !l.reviewed.includes(index)) &&
         `${expression.original} ${expression.improved} ${expression.meaning}`
           .toLowerCase()
           .includes(query.toLowerCase()),
@@ -168,6 +173,7 @@ function App() {
     const expression = l.feedback?.expressions[index];
     if (!expression) return null;
     const learned = l.reviewed.includes(index);
+    const favorite = Boolean(l.favorites?.includes(index));
     const card = `${l.id}-${index}`;
     return (
       <article className={`expression ${learned ? "learned" : ""}`} key={card}>
@@ -181,29 +187,43 @@ function App() {
                   ? "DID YOU CATCH THIS?"
                   : "KEEP THIS PHRASE"}
           </span>
-          {tab === "lessons" && expression.at !== null ? (
+          <span className="expression-actions">
+            {tab === "lessons" && expression.at !== null ? (
+              <button
+                className="timestamp"
+                type="button"
+                onClick={() => {
+                  if (expression.at !== null) play(expression.at);
+                }}
+              >
+                ▷ {clock(expression.at)}
+              </button>
+            ) : tab === "phrases" ? (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => {
+                  setSelected(l.id);
+                  setTab("lessons");
+                  setQuery("");
+                }}
+              >
+                {l.teacher} · {dateParts(l.date).month} {dateParts(l.date).day} ↗
+              </button>
+            ) : null}
             <button
-              className="timestamp"
+              className={`favorite-button ${favorite ? "on" : ""}`}
               type="button"
-              onClick={() => {
-                if (expression.at !== null) play(expression.at);
-              }}
+              aria-label="お気に入り"
+              aria-pressed={favorite}
+              title={favorite ? "お気に入りから外す" : "お気に入りに追加"}
+              onClick={() =>
+                void act(() => post(`/api/lessons/${l.id}/favorite`, { index, favorite: !favorite }))
+              }
             >
-              ▷ {clock(expression.at)}
+              {favorite ? "★" : "☆"}
             </button>
-          ) : tab === "phrases" ? (
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => {
-                setSelected(l.id);
-                setTab("lessons");
-                setQuery("");
-              }}
-            >
-              {l.teacher} · {dateParts(l.date).month} {dateParts(l.date).day} ↗
-            </button>
-          ) : null}
+          </span>
         </div>
         <p className="original">“{expression.original}”</p>
         <div className="rewrite">
@@ -704,14 +724,25 @@ function App() {
               <h2>
                 Phrase collection <span>{cards.length} expressions</span>
               </h2>
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={showLearned}
-                  onChange={(e) => setShowLearned(e.target.checked)}
-                />
-                復習済みも表示
-              </label>
+              <div className="phrase-filters">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={favoritesOnly}
+                    onChange={(e) => setFavoritesOnly(e.target.checked)}
+                  />
+                  ★ お気に入りのみ（{favoriteCount}）
+                </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={showLearned || favoritesOnly}
+                    disabled={favoritesOnly}
+                    onChange={(e) => setShowLearned(e.target.checked)}
+                  />
+                  復習済みも表示
+                </label>
+              </div>
             </div>
             <input
               className="phrase-search"
@@ -724,12 +755,22 @@ function App() {
             {!cards.length && (
               <div className="reflection-empty">
                 <h3>
-                  {expressionCount ? "復習する表現はありません。" : "ここに、あなたの表現が集まります。"}
+                  {!expressionCount
+                    ? "ここに、あなたの表現が集まります。"
+                    : !favoritesOnly
+                      ? "復習する表現はありません。"
+                      : favoriteCount
+                        ? "一致するお気に入りはありません。"
+                        : "お気に入りの表現はまだありません。"}
                 </h3>
                 <p>
-                  {expressionCount
-                    ? "復習済みの表示や検索条件を変えてみてください。"
-                    : "レッスンを分析すると、復習したい表現がこのノートに追加されます。"}
+                  {!expressionCount
+                    ? "レッスンを分析すると、復習したい表現がこのノートに追加されます。"
+                    : !favoritesOnly
+                      ? "復習済みの表示や検索条件を変えてみてください。"
+                      : favoriteCount
+                        ? "検索条件を変えてみてください。"
+                        : "表現カードの ☆ を押すと、ここに集まります。"}
                 </p>
               </div>
             )}

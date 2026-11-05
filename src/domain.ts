@@ -83,6 +83,8 @@ export type Lesson = {
   recordingUnavailable?: boolean;
   model?: string;
   reviewed: number[];
+  /** Expressions the learner starred, by index into feedback.expressions. */
+  favorites?: number[];
 };
 export type ImportRecord = {
   name: string;

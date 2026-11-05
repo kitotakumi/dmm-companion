@@ -61,3 +61,66 @@ test("ローカルAPIの認証・Origin検証と音声Range配信", async () => 
   expect(statSync(store.path("credentials.json")).mode & 0o777).toBe(0o600);
   expect(statSync(root).mode & 0o777).toBe(0o700);
 });
+
+test("表現のお気に入りを登録・解除して保存し、不正な番号は拒否する", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dmm-server-"));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const store = new Store(root);
+  const expression = {
+    kind: "expression",
+    at: null,
+    original: "It is good",
+    improved: "It sounds great.",
+    meaning: "いいね",
+    explanation: "相づち",
+    practice: "That sounds great.",
+    confidence: "high",
+  } as const;
+  store.merge({
+    id: "test",
+    date: "2026-01-01",
+    teacher: "Teacher",
+    topic: "",
+    attended: true,
+    tracks: [],
+    phase: "done",
+    reviewed: [],
+    feedback: {
+      source: "native_audio",
+      title: "Practice",
+      summary: "Summary",
+      speakerIdentification: "Identified",
+      strengths: ["Clear"],
+      focus: ["Tense"],
+      expressions: [expression, expression],
+      nextLesson: ["Practice"],
+      uncertainties: [],
+    },
+  });
+  const { server, url } = serve(new Companion(store, "gemini-test", noSavedLogin, "gemini-test"), 0);
+  cleanups.push(() => {
+    void server.stop(true);
+  });
+  const base = new URL(url);
+  const headers = { "x-companion-token": base.hash.slice(1), "Content-Type": "application/json" };
+  const favorite = (body: unknown) =>
+    fetch(`${base.origin}/api/lessons/test/favorite`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+
+  expect((await favorite({ index: 1, favorite: true })).status).toBe(200);
+  expect((await favorite({ index: 1, favorite: true })).status).toBe(200);
+  expect(new Store(root).lesson("test").favorites).toEqual([1]);
+  const exported = (await (await fetch(`${base.origin}/api/export`, { headers })).json()) as {
+    lessons: { favorites: number[] }[];
+  };
+  expect(exported.lessons[0]?.favorites).toEqual([1]);
+
+  expect((await favorite({ index: 2, favorite: true })).status).toBe(400);
+  expect((await favorite({ index: -1, favorite: true })).status).toBe(400);
+  expect((await favorite({ index: 0, favorite: "yes" })).status).toBe(400);
+  expect((await favorite({ index: 1, favorite: false })).status).toBe(200);
+  expect(new Store(root).lesson("test").favorites).toEqual([]);
+});

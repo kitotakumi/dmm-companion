@@ -134,6 +134,25 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
           store.save();
           return Response.json({ ok: true });
         }
+        const favorite = /^\/api\/lessons\/([\w-]+)\/favorite$/.exec(url.pathname);
+        if (favorite?.[1] && request.method === "POST") {
+          const lesson = store.lesson(favorite[1]);
+          const body = (await request.json()) as { index?: number; favorite?: boolean };
+          if (
+            !Number.isInteger(body.index) ||
+            body.index === undefined ||
+            body.index < 0 ||
+            body.index >= (lesson.feedback?.expressions.length ?? 0) ||
+            typeof body.favorite !== "boolean"
+          )
+            return Response.json({ error: "お気に入りの項目が不正です。" }, { status: 400 });
+          const favorites = lesson.favorites ?? [];
+          lesson.favorites = body.favorite
+            ? [...new Set([...favorites, body.index])]
+            : favorites.filter((i) => i !== body.index);
+          store.save();
+          return Response.json({ ok: true });
+        }
         const audio = /^\/api\/lessons\/([\w-]+)\/audio$/.exec(url.pathname);
         if (audio?.[1] && request.method === "GET") {
           const lesson = store.lesson(audio[1]);
@@ -180,6 +199,7 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
                 teacher: l.teacher,
                 feedback: l.feedback,
                 reviewed: l.reviewed,
+                favorites: l.favorites ?? [],
               })),
             },
             {
