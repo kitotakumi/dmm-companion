@@ -125,6 +125,63 @@ test("表現のお気に入りを登録・解除して保存し、不正な番�
   expect(new Store(root).lesson("test").favorites).toEqual([]);
 });
 
+test("自分で書いた表現を追加・編集・削除して保存し、書き出しにも含める", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dmm-server-"));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const store = new Store(root);
+  const { server, url } = serve(new Companion(store, "gemini-test", noSavedLogin, "gemini-test"), 0);
+  cleanups.push(() => {
+    void server.stop(true);
+  });
+  const base = new URL(url);
+  const headers = { "x-companion-token": base.hash.slice(1), "Content-Type": "application/json" };
+  const send = (path: string, method: string, body?: unknown) =>
+    fetch(`${base.origin}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+  const added = await send("/api/expressions", "POST", {
+    text: " It can be. ",
+    meaning: "そういうこともある",
+    memo: "",
+  });
+  expect(added.status).toBe(201);
+  const { id } = (await added.json()) as { id: string };
+  expect(new Store(root).library.ownExpressions).toEqual([
+    {
+      id,
+      text: "It can be.",
+      meaning: "そういうこともある",
+      memo: "",
+      createdAt: expect.any(String),
+      reviewed: false,
+      favorite: false,
+    },
+  ]);
+  expect((await send("/api/expressions", "POST", { text: "  ", meaning: "", memo: "" })).status).toBe(400);
+
+  expect(
+    (await send(`/api/expressions/${id}`, "POST", { memo: "交通事故の話で", favorite: true })).status,
+  ).toBe(200);
+  expect((await send(`/api/expressions/${id}`, "POST", { reviewed: true })).status).toBe(200);
+  expect(new Store(root).library.ownExpressions?.[0]).toMatchObject({
+    text: "It can be.",
+    memo: "交通事故の話で",
+    favorite: true,
+    reviewed: true,
+  });
+  expect((await send(`/api/expressions/${id}`, "POST", { text: "" })).status).toBe(400);
+  expect((await send(`/api/expressions/${id}`, "POST", { id: "other" })).status).toBe(400);
+  const exported = (await (await send("/api/export", "GET")).json()) as { ownExpressions: { id: string }[] };
+  expect(exported.ownExpressions.map((e) => e.id)).toEqual([id]);
+
+  expect((await send(`/api/expressions/${id}`, "DELETE")).status).toBe(200);
+  expect(new Store(root).library.ownExpressions).toEqual([]);
+  expect((await send(`/api/expressions/${id}`, "POST", { reviewed: false })).status).toBe(404);
+});
+
 test("先生の発言の書き起こしは振り返りの途中でも受け付け、1件ずつ進めて失敗を残す", async () => {
   const root = mkdtempSync(join(tmpdir(), "dmm-server-"));
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));

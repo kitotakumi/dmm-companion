@@ -68,6 +68,8 @@ a:focus-visible {
   padding: 35px 18px 24px;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: none;
 }
 .brand {
   display: flex;
@@ -138,8 +140,31 @@ a:focus-visible {
 .nav-item:hover:not(.active) {
   background: #dde2d6;
 }
+.sidebar-write {
+  margin: 10px 0 auto;
+}
+.write-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px;
+  border: 1px dashed #c3cab8;
+  border-radius: 5px;
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+}
+.write-button > span {
+  font-size: 18px;
+  line-height: 1;
+  color: var(--accent);
+}
+.write-button:hover {
+  background: #dde2d6;
+}
 .sidebar-note {
-  margin: auto 12px 70px;
+  margin: 0 12px 70px;
   border-top: 1px solid #d4dacb;
   padding-top: 27px;
 }
@@ -905,14 +930,90 @@ audio::-webkit-media-controls-panel {
 .help-panel a {
   color: var(--accent);
 }
+.phrase-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 24px;
+}
 .phrase-search {
-  width: 100%;
+  flex: 1 1 240px;
+  min-width: 0;
   padding: 14px 18px;
   background: #fcfbf6;
   border: 1px solid var(--line);
   border-radius: 4px;
   font-size: 12px;
-  margin: 10px 0 24px;
+}
+.expression.own .rewrite {
+  margin-top: 14px;
+}
+.expression.own .explanation {
+  white-space: pre-wrap;
+}
+.own-form {
+  display: grid;
+  gap: 14px;
+}
+.own-form label {
+  display: grid;
+  gap: 6px;
+  font-size: 10px;
+  color: #8a957d;
+}
+.own-form input,
+.own-form textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: #fcfbf6;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  resize: vertical;
+}
+.own-form .own-text {
+  font-family: "Playfair Display", serif;
+  font-size: 18px;
+  line-height: 1.5;
+}
+.own-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.own-form-actions small {
+  margin-right: auto;
+  font-size: 9px;
+  color: #a2aa92;
+}
+.own-form .primary-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.own-saved {
+  font-size: 10px;
+  line-height: 1.7;
+  color: #5f7a52;
+  overflow-wrap: anywhere;
+}
+.sidebar-write .own-form {
+  margin: 0 0 24px;
+  padding: 14px;
+  gap: 11px;
+}
+.sidebar-write .own-form .own-text {
+  font-size: 15px;
+}
+.sidebar-write .own-form-actions small {
+  flex-basis: 100%;
+}
+.sidebar-write .own-form-actions button {
+  flex: 1 1 auto;
+  padding: 9px 6px;
 }
 .phrase-grid {
   display: grid;
@@ -1051,9 +1152,11 @@ footer {
     align-items: center;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+    overflow: visible;
   }
   .sidebar-caption,
   .sidebar-note,
+  .sidebar-write,
   .sidebar-bottom {
     display: none;
   }

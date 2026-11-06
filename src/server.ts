@@ -1,8 +1,14 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { z } from "zod";
 import type { AutomaticReviews } from "./automation";
 import type { Companion } from "./coach";
-import { safeError } from "./domain";
+import { type OwnExpression, ownExpressionFields, safeError } from "./domain";
 import index from "./web/index.html";
+
+/** A change to an expression the learner wrote: rewritten fields, or its reviewed and favorite marks. */
+const ownExpressionChange = z
+  .strictObject({ ...ownExpressionFields.shape, reviewed: z.boolean(), favorite: z.boolean() })
+  .partial();
 
 export function serve(companion: Companion, port: number, automatic?: AutomaticReviews) {
   const token = randomBytes(24).toString("hex");
@@ -172,6 +178,35 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
           store.save();
           return Response.json({ ok: true });
         }
+        if (url.pathname === "/api/expressions" && request.method === "POST") {
+          const fields = ownExpressionFields.safeParse(await request.json());
+          if (!fields.success) return Response.json({ error: "表現の入力が不正です。" }, { status: 400 });
+          const expression: OwnExpression = {
+            id: randomUUID(),
+            ...fields.data,
+            createdAt: new Date().toISOString(),
+            reviewed: false,
+            favorite: false,
+          };
+          store.library.ownExpressions = [...(store.library.ownExpressions ?? []), expression];
+          store.save();
+          return Response.json(expression, { status: 201 });
+        }
+        const own = /^\/api\/expressions\/([\w-]+)$/.exec(url.pathname);
+        if (own?.[1] && (request.method === "POST" || request.method === "DELETE")) {
+          const expressions = store.library.ownExpressions ?? [];
+          const expression = expressions.find((e) => e.id === own[1]);
+          if (!expression) return Response.json({ error: "表現が見つかりません。" }, { status: 404 });
+          if (request.method === "DELETE")
+            store.library.ownExpressions = expressions.filter((e) => e !== expression);
+          else {
+            const change = ownExpressionChange.safeParse(await request.json());
+            if (!change.success) return Response.json({ error: "表現の変更が不正です。" }, { status: 400 });
+            Object.assign(expression, change.data);
+          }
+          store.save();
+          return Response.json({ ok: true });
+        }
         const audio = /^\/api\/lessons\/([\w-]+)\/audio$/.exec(url.pathname);
         if (audio?.[1] && request.method === "GET") {
           const lesson = store.lesson(audio[1]);
@@ -220,6 +255,7 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
                 reviewed: l.reviewed,
                 favorites: l.favorites ?? [],
               })),
+              ownExpressions: store.library.ownExpressions ?? [],
             },
             {
               headers: {
