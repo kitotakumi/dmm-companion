@@ -181,12 +181,13 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
         if (url.pathname === "/api/expressions" && request.method === "POST") {
           const fields = ownExpressionFields.safeParse(await request.json());
           if (!fields.success) return Response.json({ error: "表現の入力が不正です。" }, { status: 400 });
+          // A written expression starts among the favorites; its star comes off like any other.
           const expression: OwnExpression = {
             id: randomUUID(),
             ...fields.data,
             createdAt: new Date().toISOString(),
             reviewed: false,
-            favorite: false,
+            favorite: true,
           };
           store.library.ownExpressions = [...(store.library.ownExpressions ?? []), expression];
           store.save();
