@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Lesson, Library } from "../domain";
+import type { Lesson, Library, OwnExpression } from "../domain";
 import { slackShareText } from "../share";
 import { clock, span, timedSegments } from "../timestamps";
 import { LessonAssessment } from "./assessment";
+import { ExpressionForm } from "./expression-form";
 import { Growth } from "./growth";
 import { TeacherLines } from "./listening";
 import { LessonSpeaking } from "./speaking";
@@ -84,6 +85,12 @@ function App() {
   const [copied, setCopied] = useState("");
   const [showLearned, setShowLearned] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  // Whether a new expression is being written in the notebook, or jotted down in the sidebar beside
+  // whatever is open, and which written one is being rewritten.
+  const [writing, setWriting] = useState(false);
+  const [jotting, setJotting] = useState(false);
+  const [editing, setEditing] = useState("");
+  const sidebar = useRef<HTMLElement>(null);
   const audio = useRef<HTMLAudioElement>(null);
   const stopAt = useRef<number | null>(null);
   // One native-example player at a time: which card and which word.
@@ -114,10 +121,14 @@ function App() {
     }
   }
   const lessons = data?.lessons ?? [];
+  const own = data?.ownExpressions ?? [];
   const lesson = lessons.find((l) => l.id === selected);
-  const reviewed = lessons.reduce((sum, l) => sum + l.reviewed.length, 0);
-  const expressionCount = lessons.reduce((sum, l) => sum + (l.feedback?.expressions.length ?? 0), 0);
-  const favoriteCount = lessons.reduce((sum, l) => sum + (l.favorites?.length ?? 0), 0);
+  const reviewed =
+    lessons.reduce((sum, l) => sum + l.reviewed.length, 0) + own.filter((e) => e.reviewed).length;
+  const expressionCount =
+    lessons.reduce((sum, l) => sum + (l.feedback?.expressions.length ?? 0), 0) + own.length;
+  const favoriteCount =
+    lessons.reduce((sum, l) => sum + (l.favorites?.length ?? 0), 0) + own.filter((e) => e.favorite).length;
   const analyzed = lessons.filter((l) => l.feedback).length;
   const busy = Boolean(data?.status.busy);
   const transcribing = lessons.find((l) => l.id === data?.transcription.queue[0]);
@@ -137,18 +148,27 @@ function App() {
         new Date(l.date).toLocaleDateString("sv-SE", { timeZone: "Asia/Tokyo" }).startsWith(month)) &&
       `${l.teacher} ${l.topic} ${l.feedback?.title ?? ""}`.toLowerCase().includes(query.toLowerCase()),
   );
-  const cards = lessons
-    .flatMap((l) => (l.feedback?.expressions ?? []).map((expression, index) => ({ l, expression, index })))
-    .filter(
-      ({ l, expression, index }) =>
-        // Favorites stay listed after they are reviewed.
-        (favoritesOnly
-          ? Boolean(l.favorites?.includes(index))
-          : showLearned || !l.reviewed.includes(index)) &&
-        `${expression.original} ${expression.improved} ${expression.meaning}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-    );
+  const listed = (favorite: boolean, learned: boolean, text: string) =>
+    // Favorites stay listed after they are reviewed.
+    (favoritesOnly ? favorite : showLearned || !learned) && text.toLowerCase().includes(query.toLowerCase());
+  const cards = [
+    ...lessons.flatMap((l) =>
+      (l.feedback?.expressions ?? []).flatMap((expression, index) =>
+        listed(
+          Boolean(l.favorites?.includes(index)),
+          l.reviewed.includes(index),
+          `${expression.original} ${expression.improved} ${expression.meaning}`,
+        )
+          ? [{ date: l.date, card: () => expressionCard(l, index) }]
+          : [],
+      ),
+    ),
+    ...own
+      .filter((e) => listed(e.favorite, e.reviewed, `${e.text} ${e.meaning} ${e.memo}`))
+      .map((e) => ({ date: e.createdAt, card: () => ownCard(e) })),
+  ]
+    // Expressions the learner wrote take their place among the lessons by the date they were written.
+    .sort((a, b) => b.date.localeCompare(a.date));
   const teacherLines = lesson?.tracks.some((t) => t.role === "Teacher") && (
     <TeacherLines
       transcript={lesson.teacherTranscript}
@@ -225,18 +245,9 @@ function App() {
                 {l.teacher} · {dateParts(l.date).month} {dateParts(l.date).day} ↗
               </button>
             ) : null}
-            <button
-              className={`favorite-button ${favorite ? "on" : ""}`}
-              type="button"
-              aria-label="お気に入り"
-              aria-pressed={favorite}
-              title={favorite ? "お気に入りから外す" : "お気に入りに追加"}
-              onClick={() =>
-                void act(() => post(`/api/lessons/${l.id}/favorite`, { index, favorite: !favorite }))
-              }
-            >
-              {favorite ? "★" : "☆"}
-            </button>
+            {favoriteButton(favorite, () =>
+              post(`/api/lessons/${l.id}/favorite`, { index, favorite: !favorite }),
+            )}
           </span>
         </div>
         <p className="original">“{expression.original}”</p>
@@ -275,21 +286,87 @@ function App() {
           <span>TRY SAYING</span>
           <p>{expression.practice}</p>
         </div>
-        <button
-          className={`review-button ${learned ? "checked" : ""}`}
-          type="button"
-          aria-pressed={learned}
-          onClick={() => void act(() => post(`/api/lessons/${l.id}/review`, { index, reviewed: !learned }))}
-        >
-          {learned ? "✓ 復習済み" : "○ 声に出して復習した"}
-        </button>
+        {reviewButton(learned, () => post(`/api/lessons/${l.id}/review`, { index, reviewed: !learned }))}
       </article>
+    );
+  }
+  /** A card for an expression the learner wrote; it turns into the form while being rewritten. */
+  function ownCard(e: OwnExpression) {
+    const change = (fields: Partial<OwnExpression>) => post(`/api/expressions/${e.id}`, fields);
+    if (editing === e.id)
+      return (
+        <ExpressionForm
+          key={e.id}
+          initial={e}
+          save={async (fields) => {
+            await change(fields);
+            await refresh();
+            setEditing("");
+          }}
+          cancel={() => setEditing("")}
+        />
+      );
+    return (
+      <article className={`expression own ${e.reviewed ? "learned" : ""}`} key={e.id}>
+        <div className="expression-top">
+          <span className="eyebrow">MY PHRASE</span>
+          <span className="expression-actions">
+            <button type="button" className="text-button" onClick={() => setEditing(e.id)}>
+              編集
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => {
+                if (confirm(`「${e.text}」をノートから削除しますか？`))
+                  void act(() => api(`/api/expressions/${e.id}`, { method: "DELETE" }));
+              }}
+            >
+              削除
+            </button>
+            {favoriteButton(e.favorite, () => change({ favorite: !e.favorite }))}
+          </span>
+        </div>
+        <div className="rewrite">
+          <span aria-hidden="true">↳</span>
+          <p>{e.text}</p>
+        </div>
+        {e.meaning && <p className="meaning">{e.meaning}</p>}
+        {e.memo && <p className="explanation">{e.memo}</p>}
+        {reviewButton(e.reviewed, () => change({ reviewed: !e.reviewed }))}
+      </article>
+    );
+  }
+  function favoriteButton(favorite: boolean, toggle: () => Promise<unknown>) {
+    return (
+      <button
+        className={`favorite-button ${favorite ? "on" : ""}`}
+        type="button"
+        aria-label="お気に入り"
+        aria-pressed={favorite}
+        title={favorite ? "お気に入りから外す" : "お気に入りに追加"}
+        onClick={() => void act(toggle)}
+      >
+        {favorite ? "★" : "☆"}
+      </button>
+    );
+  }
+  function reviewButton(learned: boolean, toggle: () => Promise<unknown>) {
+    return (
+      <button
+        className={`review-button ${learned ? "checked" : ""}`}
+        type="button"
+        aria-pressed={learned}
+        onClick={() => void act(toggle)}
+      >
+        {learned ? "✓ 復習済み" : "○ 声に出して復習した"}
+      </button>
     );
   }
 
   return (
     <div className="shell">
-      <aside className="sidebar">
+      <aside className="sidebar" ref={sidebar}>
         <a className="brand" href={`/${location.search}`} aria-label="DMM Companion ホーム">
           <span className="brand-symbol">
             c<span>°</span>
@@ -331,15 +408,38 @@ function App() {
             <span>↗</span> 成長の記録 <small>{lessons.filter((l) => l.metrics || l.assessment).length}</small>
           </button>
         </nav>
-        <div className="sidebar-note">
-          <span className="small-star">✳</span>
-          <p>
-            言えなかったことが、
-            <br />
-            次は、言えることに。
-          </p>
-          <span>One conversation at a time.</span>
+        <div className="sidebar-write">
+          {jotting ? (
+            <ExpressionForm
+              stayOpen
+              save={async (fields) => {
+                await post("/api/expressions", fields);
+                await refresh();
+              }}
+              cancel={() => {
+                setJotting(false);
+                // A short screen scrolled the sidebar to show the form; the brand comes back with it.
+                sidebar.current?.scrollTo({ top: 0 });
+              }}
+            />
+          ) : (
+            <button type="button" className="write-button" onClick={() => setJotting(true)}>
+              <span>＋</span> 表現を書く
+            </button>
+          )}
         </div>
+        {/* The form takes the note's place, so it fits on a laptop screen. */}
+        {!jotting && (
+          <div className="sidebar-note">
+            <span className="small-star">✳</span>
+            <p>
+              言えなかったことが、
+              <br />
+              次は、言えることに。
+            </p>
+            <span>One conversation at a time.</span>
+          </div>
+        )}
         <div className="sidebar-bottom">
           <span className="local-dot" /> このMacに保存<small>DMM Eikaiwa · Personal companion</small>
         </div>
@@ -769,15 +869,34 @@ function App() {
                 </label>
               </div>
             </div>
-            <input
-              className="phrase-search"
-              aria-label="表現を検索"
-              placeholder="英語・日本語で表現を検索…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <div className="phrase-grid">{cards.map(({ l, index }) => expressionCard(l, index))}</div>
-            {!cards.length && (
+            <div className="phrase-tools">
+              <input
+                className="phrase-search"
+                aria-label="表現を検索"
+                placeholder="英語・日本語で表現を検索…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              {!writing && (
+                <button type="button" className="outline-button" onClick={() => setWriting(true)}>
+                  ＋ 表現を書く
+                </button>
+              )}
+            </div>
+            <div className="phrase-grid">
+              {writing && (
+                <ExpressionForm
+                  save={async (fields) => {
+                    await post("/api/expressions", fields);
+                    await refresh();
+                    setWriting(false);
+                  }}
+                  cancel={() => setWriting(false)}
+                />
+              )}
+              {cards.map(({ card }) => card())}
+            </div>
+            {!cards.length && !writing && (
               <div className="reflection-empty">
                 <h3>
                   {!expressionCount
@@ -790,7 +909,7 @@ function App() {
                 </h3>
                 <p>
                   {!expressionCount
-                    ? "レッスンを分析すると、復習したい表現がこのノートに追加されます。"
+                    ? "レッスンを分析すると、復習したい表現がこのノートに追加されます。「＋ 表現を書く」から自分で書き足すこともできます。"
                     : !favoritesOnly
                       ? "復習済みの表示や検索条件を変えてみてください。"
                       : favoriteCount

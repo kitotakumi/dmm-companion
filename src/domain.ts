@@ -90,6 +90,19 @@ export type Lesson = {
   /** Expressions the learner starred, by index into feedback.expressions. */
   favorites?: number[];
 };
+/** What the learner writes for an expression of their own; only the expression itself must be filled in. */
+export const ownExpressionFields = z.object({
+  text: z.string().trim().min(1).max(500),
+  meaning: z.string().trim().max(1000),
+  memo: z.string().trim().max(2000),
+});
+/** An expression the learner wrote into the phrase notebook themselves, apart from any lesson. */
+export type OwnExpression = z.infer<typeof ownExpressionFields> & {
+  id: string;
+  createdAt: string;
+  reviewed: boolean;
+  favorite: boolean;
+};
 export type ImportRecord = {
   name: string;
   sha256: string;
@@ -101,6 +114,8 @@ export type ImportRecord = {
 export type Library = {
   version: 1;
   lessons: Lesson[];
+  /** Expressions the learner wrote into the phrase notebook, in the order they were written. */
+  ownExpressions?: OwnExpression[];
   imports: ImportRecord[];
   coverage: {
     months: string[];
