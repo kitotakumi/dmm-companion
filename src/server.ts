@@ -2,13 +2,25 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { AutomaticReviews } from "./automation";
 import type { Companion } from "./coach";
-import { type OwnExpression, ownExpressionFields, safeError } from "./domain";
+import { type Lesson, type OwnExpression, ownExpressionFields, type SavedAdvice, safeError } from "./domain";
 import index from "./web/index.html";
 
 /** A change to an expression the learner wrote: rewritten fields, or its reviewed and favorite marks. */
 const ownExpressionChange = z
   .strictObject({ ...ownExpressionFields.shape, reviewed: z.boolean(), favorite: z.boolean() })
   .partial();
+/** Advice to keep in the notebook: the lesson, and the advice as its review words it. */
+const adviceToKeep = z.strictObject({ lessonId: z.string(), text: z.string() });
+const adviceChange = z.strictObject({ favorite: z.boolean() });
+
+/** The advice a lesson's review gives, with where it gives it. */
+function adviceIn(lesson: Lesson): Pick<SavedAdvice, "from" | "text">[] {
+  return [
+    ...(lesson.feedback?.focus ?? []).map((text) => ({ from: "focus" as const, text })),
+    ...(lesson.feedback?.nextLesson ?? []).map((text) => ({ from: "nextLesson" as const, text })),
+    ...(lesson.assessment?.criteria ?? []).map((c) => ({ from: c.criterion, text: c.nextStep })),
+  ];
+}
 
 export function serve(companion: Companion, port: number, automatic?: AutomaticReviews) {
   const token = randomBytes(24).toString("hex");
@@ -208,6 +220,44 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
           store.save();
           return Response.json({ ok: true });
         }
+        if (url.pathname === "/api/advice" && request.method === "POST") {
+          const body = adviceToKeep.safeParse(await request.json());
+          if (!body.success) return Response.json({ error: "アドバイスの指定が不正です。" }, { status: 400 });
+          const { lessonId, text } = body.data;
+          const lesson = store.library.lessons.find((l) => l.id === lessonId);
+          const from = lesson && adviceIn(lesson).find((a) => a.text === text)?.from;
+          if (!from) return Response.json({ error: "アドバイスが見つかりません。" }, { status: 404 });
+          const kept = store.library.savedAdvice ?? [];
+          const already = kept.find((a) => a.lessonId === lessonId && a.text === text);
+          if (already) return Response.json(already);
+          // Kept advice starts among the favorites, as the learner's own expressions do.
+          const advice: SavedAdvice = {
+            id: randomUUID(),
+            lessonId,
+            from,
+            text,
+            savedAt: new Date().toISOString(),
+            favorite: true,
+          };
+          store.library.savedAdvice = [...kept, advice];
+          store.save();
+          return Response.json(advice, { status: 201 });
+        }
+        const keptAdvice = /^\/api\/advice\/([\w-]+)$/.exec(url.pathname);
+        if (keptAdvice?.[1] && (request.method === "POST" || request.method === "DELETE")) {
+          const kept = store.library.savedAdvice ?? [];
+          const advice = kept.find((a) => a.id === keptAdvice[1]);
+          if (!advice) return Response.json({ error: "アドバイスが見つかりません。" }, { status: 404 });
+          if (request.method === "DELETE") store.library.savedAdvice = kept.filter((a) => a !== advice);
+          else {
+            const change = adviceChange.safeParse(await request.json());
+            if (!change.success)
+              return Response.json({ error: "アドバイスの変更が不正です。" }, { status: 400 });
+            advice.favorite = change.data.favorite;
+          }
+          store.save();
+          return Response.json({ ok: true });
+        }
         const audio = /^\/api\/lessons\/([\w-]+)\/audio$/.exec(url.pathname);
         if (audio?.[1] && request.method === "GET") {
           const lesson = store.lesson(audio[1]);
@@ -257,6 +307,7 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
                 favorites: l.favorites ?? [],
               })),
               ownExpressions: store.library.ownExpressions ?? [],
+              savedAdvice: store.library.savedAdvice ?? [],
             },
             {
               headers: {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Assessment } from "./assessment";
+import type { Assessment, criteria } from "./assessment";
 
 export const feedbackSchema = z.object({
   source: z.enum(["native_audio", "audio_transcript"]),
@@ -92,6 +92,8 @@ export type Lesson = {
 };
 /** What the learner writes for an expression of their own; only the expression itself must be filled in. */
 export const ownExpressionFields = z.object({
+  /** A sentence or phrase, or a word, which the notebook shelves apart. */
+  kind: z.enum(["sentence", "word"]),
   text: z.string().trim().min(1).max(500),
   meaning: z.string().trim().max(1000),
   memo: z.string().trim().max(2000),
@@ -101,6 +103,16 @@ export type OwnExpression = z.infer<typeof ownExpressionFields> & {
   id: string;
   createdAt: string;
   reviewed: boolean;
+  favorite: boolean;
+};
+/** A piece of a lesson's advice the learner keeps in the phrase notebook, copied so a new analysis leaves it. */
+export type SavedAdvice = {
+  id: string;
+  lessonId: string;
+  /** Where the review gives it: the next steps, what to take to the next lesson, or a CEFR aspect's next step. */
+  from: "focus" | "nextLesson" | (typeof criteria)[number];
+  text: string;
+  savedAt: string;
   favorite: boolean;
 };
 export type ImportRecord = {
@@ -116,6 +128,8 @@ export type Library = {
   lessons: Lesson[];
   /** Expressions the learner wrote into the phrase notebook, in the order they were written. */
   ownExpressions?: OwnExpression[];
+  /** Advice from lesson reviews the learner keeps in the phrase notebook, in the order it was kept. */
+  savedAdvice?: SavedAdvice[];
   imports: ImportRecord[];
   coverage: {
     months: string[];

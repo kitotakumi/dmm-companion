@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { criteria } from "../src/assessment";
 import { Companion } from "../src/coach";
 import { serve } from "../src/server";
 import { Store } from "../src/store";
@@ -143,6 +144,7 @@ test("自分で書いた表現をお気に入りとして追加し、編集・�
     });
 
   const added = await send("/api/expressions", "POST", {
+    kind: "sentence",
     text: " It can be. ",
     meaning: "そういうこともある",
     memo: "",
@@ -152,6 +154,7 @@ test("自分で書いた表現をお気に入りとして追加し、編集・�
   expect(new Store(root).library.ownExpressions).toEqual([
     {
       id,
+      kind: "sentence",
       text: "It can be.",
       meaning: "そういうこともある",
       memo: "",
@@ -160,13 +163,19 @@ test("自分で書いた表現をお気に入りとして追加し、編集・�
       favorite: true,
     },
   ]);
-  expect((await send("/api/expressions", "POST", { text: "  ", meaning: "", memo: "" })).status).toBe(400);
+  const blank = { kind: "sentence", text: "  ", meaning: "", memo: "" };
+  expect((await send("/api/expressions", "POST", blank)).status).toBe(400);
+  expect((await send("/api/expressions", "POST", { ...blank, text: "Hi.", kind: "advice" })).status).toBe(
+    400,
+  );
 
   expect(
-    (await send(`/api/expressions/${id}`, "POST", { memo: "交通事故の話で", favorite: false })).status,
+    (await send(`/api/expressions/${id}`, "POST", { kind: "word", memo: "交通事故の話で", favorite: false }))
+      .status,
   ).toBe(200);
   expect((await send(`/api/expressions/${id}`, "POST", { reviewed: true })).status).toBe(200);
   expect(new Store(root).library.ownExpressions?.[0]).toMatchObject({
+    kind: "word",
     text: "It can be.",
     memo: "交通事故の話で",
     favorite: false,
@@ -180,6 +189,93 @@ test("自分で書いた表現をお気に入りとして追加し、編集・�
   expect((await send(`/api/expressions/${id}`, "DELETE")).status).toBe(200);
   expect(new Store(root).library.ownExpressions).toEqual([]);
   expect((await send(`/api/expressions/${id}`, "POST", { reviewed: false })).status).toBe(404);
+});
+
+test("振り返りのアドバイスをお気に入りとしてノートに残し、外して保存し、書き出しにも含める", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dmm-server-"));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const store = new Store(root);
+  store.merge({
+    id: "test",
+    date: "2026-01-01",
+    teacher: "Teacher",
+    topic: "",
+    attended: true,
+    tracks: [],
+    phase: "done",
+    reviewed: [],
+    feedback: {
+      source: "native_audio",
+      title: "Practice",
+      summary: "Summary",
+      speakerIdentification: "Identified",
+      strengths: ["Clear"],
+      focus: ["三単現の -s を意識する"],
+      expressions: [],
+      nextLesson: ["対比のフレーズを使ってみる"],
+      uncertainties: [],
+    },
+    assessment: {
+      source: "native_audio",
+      criteria: criteria.map((criterion) => ({
+        criterion,
+        evidence: "根拠",
+        level: "B1" as const,
+        nextStep: `${criterion} を伸ばす練習`,
+      })),
+      overall: { rationale: "全体", level: "B1" },
+      caveats: [],
+      model: "gemini-test",
+      assessedAt: "2026-01-01",
+    },
+  });
+  const { server, url } = serve(new Companion(store, "gemini-test", noSavedLogin, "gemini-test"), 0);
+  cleanups.push(() => {
+    void server.stop(true);
+  });
+  const base = new URL(url);
+  const headers = { "x-companion-token": base.hash.slice(1), "Content-Type": "application/json" };
+  const send = (path: string, method: string, body?: unknown) =>
+    fetch(`${base.origin}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const keep = (text: string, lessonId = "test") => send("/api/advice", "POST", { lessonId, text });
+
+  const kept = await keep("三単現の -s を意識する");
+  expect(kept.status).toBe(201);
+  const { id } = (await kept.json()) as { id: string };
+  expect(new Store(root).library.savedAdvice).toEqual([
+    {
+      id,
+      lessonId: "test",
+      from: "focus",
+      text: "三単現の -s を意識する",
+      savedAt: expect.any(String),
+      favorite: true,
+    },
+  ]);
+  const again = await keep("三単現の -s を意識する");
+  expect(again.status).toBe(200);
+  expect(((await again.json()) as { id: string }).id).toBe(id);
+  expect((await keep("対比のフレーズを使ってみる")).status).toBe(201);
+  expect((await keep("fluency を伸ばす練習")).status).toBe(201);
+  expect((await keep("振り返りにない助言")).status).toBe(404);
+  expect((await keep("三単現の -s を意識する", "other")).status).toBe(404);
+  expect((await send("/api/advice", "POST", { lessonId: "test", text: "x", from: "focus" })).status).toBe(
+    400,
+  );
+
+  expect((await send(`/api/advice/${id}`, "POST", { favorite: false })).status).toBe(200);
+  expect(new Store(root).library.savedAdvice?.[0]?.favorite).toBe(false);
+  expect((await send(`/api/advice/${id}`, "POST", { text: "書き換え" })).status).toBe(400);
+  const exported = (await (await send("/api/export", "GET")).json()) as { savedAdvice: { from: string }[] };
+  expect(exported.savedAdvice.map((a) => a.from)).toEqual(["focus", "nextLesson", "fluency"]);
+
+  expect((await send(`/api/advice/${id}`, "DELETE")).status).toBe(200);
+  expect(new Store(root).library.savedAdvice?.map((a) => a.from)).toEqual(["nextLesson", "fluency"]);
+  expect((await send(`/api/advice/${id}`, "DELETE")).status).toBe(404);
 });
 
 test("先生の発言の書き起こしは振り返りの途中でも受け付け、1件ずつ進めて失敗を残す", async () => {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Lesson, Library, OwnExpression } from "../domain";
+import { aspectLabel } from "../cefr";
+import type { Lesson, Library, OwnExpression, SavedAdvice } from "../domain";
 import { slackShareText } from "../share";
 import { clock, span, timedSegments } from "../timestamps";
 import { LessonAssessment } from "./assessment";
@@ -57,6 +58,12 @@ const phaseLabel: Record<Lesson["phase"], string> = {
   done: "振り返りあり",
   error: "要確認",
 };
+/** The notebook's shelves: sentences from lessons and the learner, the learner's words, and kept advice. */
+const categories = { all: "すべて", sentence: "文章", word: "単語", advice: "アドバイス" } as const;
+type Category = keyof typeof categories;
+/** Where in a lesson's review a piece of kept advice was given. */
+const adviceFrom = (from: SavedAdvice["from"]) =>
+  from === "focus" ? "次の一歩" : from === "nextLesson" ? "次のレッスンへ" : `CEFR ${aspectLabel[from]}`;
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...options,
@@ -85,6 +92,7 @@ function App() {
   const [copied, setCopied] = useState("");
   const [showLearned, setShowLearned] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [category, setCategory] = useState<Category>("all");
   // Whether a new expression is being written in the notebook, or jotted down in the sidebar beside
   // whatever is open, and which written one is being rewritten.
   const [writing, setWriting] = useState(false);
@@ -122,13 +130,15 @@ function App() {
   }
   const lessons = data?.lessons ?? [];
   const own = data?.ownExpressions ?? [];
+  const advice = data?.savedAdvice ?? [];
   const lesson = lessons.find((l) => l.id === selected);
   const reviewed =
     lessons.reduce((sum, l) => sum + l.reviewed.length, 0) + own.filter((e) => e.reviewed).length;
   const expressionCount =
     lessons.reduce((sum, l) => sum + (l.feedback?.expressions.length ?? 0), 0) + own.length;
   const favoriteCount =
-    lessons.reduce((sum, l) => sum + (l.favorites?.length ?? 0), 0) + own.filter((e) => e.favorite).length;
+    lessons.reduce((sum, l) => sum + (l.favorites?.length ?? 0), 0) +
+    [...own, ...advice].filter((e) => e.favorite).length;
   const analyzed = lessons.filter((l) => l.feedback).length;
   const busy = Boolean(data?.status.busy);
   const transcribing = lessons.find((l) => l.id === data?.transcription.queue[0]);
@@ -151,23 +161,36 @@ function App() {
   const listed = (favorite: boolean, learned: boolean, text: string) =>
     // Favorites stay listed after they are reviewed.
     (favoritesOnly ? favorite : showLearned || !learned) && text.toLowerCase().includes(query.toLowerCase());
-  const cards = [
+  const entries = [
     ...lessons.flatMap((l) =>
-      (l.feedback?.expressions ?? []).flatMap((expression, index) =>
-        listed(
+      (l.feedback?.expressions ?? []).map((expression, index) => ({
+        category: "sentence" as const,
+        date: l.date,
+        shown: listed(
           Boolean(l.favorites?.includes(index)),
           l.reviewed.includes(index),
           `${expression.original} ${expression.improved} ${expression.meaning}`,
-        )
-          ? [{ date: l.date, card: () => expressionCard(l, index) }]
-          : [],
-      ),
+        ),
+        card: () => expressionCard(l, index),
+      })),
     ),
-    ...own
-      .filter((e) => listed(e.favorite, e.reviewed, `${e.text} ${e.meaning} ${e.memo}`))
-      .map((e) => ({ date: e.createdAt, card: () => ownCard(e) })),
-  ]
-    // Expressions the learner wrote take their place among the lessons by the date they were written.
+    ...own.map((e) => ({
+      category: e.kind,
+      date: e.createdAt,
+      shown: listed(e.favorite, e.reviewed, `${e.text} ${e.meaning} ${e.memo}`),
+      card: () => ownCard(e),
+    })),
+    // Advice is not something to say aloud, so it is never marked reviewed.
+    ...advice.map((a) => ({
+      category: "advice" as const,
+      date: a.savedAt,
+      shown: listed(a.favorite, false, a.text),
+      card: () => adviceCard(a),
+    })),
+  ];
+  const cards = entries
+    .filter((e) => e.shown && (category === "all" || e.category === category))
+    // What the learner wrote or kept takes its place among the lessons by the date it was written or kept.
     .sort((a, b) => b.date.localeCompare(a.date));
   const teacherLines = lesson?.tracks.some((t) => t.role === "Teacher") && (
     <TeacherLines
@@ -309,7 +332,7 @@ function App() {
     return (
       <article className={`expression own ${e.reviewed ? "learned" : ""}`} key={e.id}>
         <div className="expression-top">
-          <span className="eyebrow">MY PHRASE</span>
+          <span className="eyebrow">{e.kind === "word" ? "MY WORD" : "MY PHRASE"}</span>
           <span className="expression-actions">
             <button type="button" className="text-button" onClick={() => setEditing(e.id)}>
               編集
@@ -335,6 +358,67 @@ function App() {
         {e.memo && <p className="explanation">{e.memo}</p>}
         {reviewButton(e.reviewed, () => change({ reviewed: !e.reviewed }))}
       </article>
+    );
+  }
+  /** A card for advice kept from a lesson's review, linked back to that lesson. */
+  function adviceCard(a: SavedAdvice) {
+    const l = lessons.find((x) => x.id === a.lessonId);
+    return (
+      <article className="expression advice" key={a.id}>
+        <div className="expression-top">
+          <span className="eyebrow">ADVICE</span>
+          <span className="expression-actions">
+            {l && (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => {
+                  setSelected(l.id);
+                  setTab("lessons");
+                  setQuery("");
+                }}
+              >
+                {l.teacher} · {dateParts(l.date).month} {dateParts(l.date).day} ↗
+              </button>
+            )}
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => {
+                if (confirm("このアドバイスをノートから削除しますか？"))
+                  void act(() => api(`/api/advice/${a.id}`, { method: "DELETE" }));
+              }}
+            >
+              削除
+            </button>
+            {favoriteButton(a.favorite, () => post(`/api/advice/${a.id}`, { favorite: !a.favorite }))}
+          </span>
+        </div>
+        <p className="advice-text">{l ? timed(l, a.text) : a.text}</p>
+        <p className="advice-from">{adviceFrom(a.from)}</p>
+      </article>
+    );
+  }
+  /** A star beside a piece of a lesson's advice that keeps it in the phrase notebook, or takes it out. */
+  function adviceStar(l: ViewLesson, text: string) {
+    const kept = advice.find((a) => a.lessonId === l.id && a.text === text);
+    return (
+      <button
+        className={`favorite-button advice-star ${kept ? "on" : ""}`}
+        type="button"
+        aria-label="表現ノートに追加"
+        aria-pressed={Boolean(kept)}
+        title={kept ? "表現ノートから外す" : "表現ノートに追加"}
+        onClick={() =>
+          void act(() =>
+            kept
+              ? api(`/api/advice/${kept.id}`, { method: "DELETE" })
+              : post("/api/advice", { lessonId: l.id, text }),
+          )
+        }
+      >
+        {kept ? "★" : "☆"}
+      </button>
     );
   }
   function favoriteButton(favorite: boolean, toggle: () => Promise<unknown>) {
@@ -363,6 +447,25 @@ function App() {
       </button>
     );
   }
+
+  // What an empty notebook says: how this shelf fills up, or that the filters hide what it holds.
+  const [emptyTitle, emptyHint] = !entries.some((e) => category === "all" || e.category === category)
+    ? category === "word"
+      ? ["単語はまだありません。", "「＋ 表現を書く」で「単語」を選んで書くと、ここに集まります。"]
+      : category === "advice"
+        ? [
+            "アドバイスはまだありません。",
+            "振り返りの「次の一歩」「次のレッスンに、ひとつ持っていこう。」と、CEFRの目安の「次へ」にある ☆ を押すと、ここに集まります。",
+          ]
+        : [
+            "ここに、あなたの表現が集まります。",
+            "レッスンを分析すると、復習したい表現がこのノートに追加されます。「＋ 表現を書く」から自分で書き足すこともできます。",
+          ]
+    : !favoritesOnly
+      ? ["復習する表現はありません。", "復習済みの表示や検索条件を変えてみてください。"]
+      : favoriteCount
+        ? ["一致するお気に入りはありません。", "検索条件を変えてみてください。"]
+        : ["お気に入りの表現はまだありません。", "表現カードの ☆ を押すと、ここに集まります。"];
 
   return (
     <div className="shell">
@@ -395,7 +498,7 @@ function App() {
               setQuery("");
             }}
           >
-            <span>⌁</span> 表現ノート <small>{expressionCount}</small>
+            <span>⌁</span> 表現ノート <small>{expressionCount + advice.length}</small>
           </button>
           <button
             className={tab === "growth" ? "nav-item active" : "nav-item"}
@@ -735,7 +838,10 @@ function App() {
                             </h3>
                             <ul>
                               {lesson.feedback.focus.map((s) => (
-                                <li key={s}>{timed(lesson, s)}</li>
+                                <li key={s}>
+                                  {timed(lesson, s)}
+                                  {adviceStar(lesson, s)}
+                                </li>
                               ))}
                             </ul>
                           </div>
@@ -750,7 +856,10 @@ function App() {
                           <h3>次のレッスンに、ひとつ持っていこう。</h3>
                           <ol>
                             {lesson.feedback.nextLesson.map((s) => (
-                              <li key={s}>{timed(lesson, s)}</li>
+                              <li key={s}>
+                                {timed(lesson, s)}
+                                {adviceStar(lesson, s)}
+                              </li>
                             ))}
                           </ol>
                         </div>
@@ -758,6 +867,7 @@ function App() {
                           assessment={lesson.assessment}
                           error={lesson.assessmentError}
                           timed={(text) => timed(lesson, text)}
+                          star={(text) => adviceStar(lesson, text)}
                         />
                         <LessonSpeaking
                           metrics={lesson.metrics}
@@ -869,6 +979,22 @@ function App() {
                 </label>
               </div>
             </div>
+            <div className="phrase-categories">
+              {(Object.keys(categories) as Category[]).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className="category-chip"
+                  aria-pressed={category === c}
+                  onClick={() => setCategory(c)}
+                >
+                  {categories[c]}
+                  <small>
+                    {c === "all" ? entries.length : entries.filter((e) => e.category === c).length}
+                  </small>
+                </button>
+              ))}
+            </div>
             <div className="phrase-tools">
               <input
                 className="phrase-search"
@@ -886,6 +1012,7 @@ function App() {
             <div className="phrase-grid">
               {writing && (
                 <ExpressionForm
+                  kind={category === "word" ? "word" : undefined}
                   save={async (fields) => {
                     await post("/api/expressions", fields);
                     await refresh();
@@ -898,24 +1025,8 @@ function App() {
             </div>
             {!cards.length && !writing && (
               <div className="reflection-empty">
-                <h3>
-                  {!expressionCount
-                    ? "ここに、あなたの表現が集まります。"
-                    : !favoritesOnly
-                      ? "復習する表現はありません。"
-                      : favoriteCount
-                        ? "一致するお気に入りはありません。"
-                        : "お気に入りの表現はまだありません。"}
-                </h3>
-                <p>
-                  {!expressionCount
-                    ? "レッスンを分析すると、復習したい表現がこのノートに追加されます。「＋ 表現を書く」から自分で書き足すこともできます。"
-                    : !favoritesOnly
-                      ? "復習済みの表示や検索条件を変えてみてください。"
-                      : favoriteCount
-                        ? "検索条件を変えてみてください。"
-                        : "表現カードの ☆ を押すと、ここに集まります。"}
-                </p>
+                <h3>{emptyTitle}</h3>
+                <p>{emptyHint}</p>
               </div>
             )}
           </section>

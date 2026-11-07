@@ -7,10 +7,13 @@ export function LessonAssessment({
   assessment,
   error,
   timed,
+  star,
 }: {
   assessment?: Lesson["assessment"];
   error?: string;
   timed: (text: string) => ReactNode;
+  /** A star beside a next step that keeps it in the phrase notebook. */
+  star: (text: string) => ReactNode;
 }) {
   if (!assessment) return error ? <p className="speaking-error">CEFRの判定に失敗しました: {error}</p> : null;
   return (
@@ -34,6 +37,7 @@ export function LessonAssessment({
             <p>
               <span className="assessment-tag">次へ</span>
               {timed(c.nextStep)}
+              {star(c.nextStep)}
             </p>
           </details>
         ))}

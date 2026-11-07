@@ -666,6 +666,11 @@ audio::-webkit-media-controls-panel {
 .favorite-button.on {
   color: var(--accent);
 }
+.advice-star {
+  font-size: 13px;
+  margin-left: 4px;
+  vertical-align: -1px;
+}
 .timestamp {
   font-size: 10px;
   color: #8a937c;
@@ -951,6 +956,46 @@ audio::-webkit-media-controls-panel {
 .expression.own .explanation {
   white-space: pre-wrap;
 }
+.advice-text {
+  font-size: 13px;
+  line-height: 1.9;
+  margin: 14px 0 0;
+  overflow-wrap: anywhere;
+}
+.advice-from {
+  font-size: 9px;
+  color: #9ca88e;
+  margin: 10px 0 0;
+}
+.phrase-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+}
+.category-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fcfbf6;
+  padding: 7px 14px;
+  font-size: 11px;
+}
+.category-chip small {
+  margin-left: 6px;
+  font-size: 10px;
+  color: #8a968c;
+}
+.category-chip:hover {
+  background: #eef0e6;
+}
+.category-chip[aria-pressed="true"] {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+.category-chip[aria-pressed="true"] small {
+  color: #b5c2b2;
+}
 .own-form {
   display: grid;
   gap: 14px;
@@ -977,6 +1022,32 @@ audio::-webkit-media-controls-panel {
   font-family: "Playfair Display", serif;
   font-size: 18px;
   line-height: 1.5;
+}
+.own-form-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.own-kinds {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #f4f3ec;
+}
+.own-kinds button {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  padding: 4px 12px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.own-kinds button[aria-pressed="true"] {
+  background: var(--green);
+  color: #fff;
 }
 .own-form-actions {
   display: flex;

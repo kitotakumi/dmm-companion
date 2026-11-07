@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { timeline } from "../src/audio";
 import { Companion, parseFeedback } from "../src/coach";
 import { DmmClient, parseDisplayName, parseHistory, parseTracks, recordingKey } from "../src/dmm";
-import { bookingUuid, duration, type Feedback, type Lesson } from "../src/domain";
+import { bookingUuid, duration, type Feedback, type Lesson, type OwnExpression } from "../src/domain";
 import { importHar, syncHistory } from "../src/importer";
 import { Store } from "../src/store";
 import { noSavedLogin } from "./fakes";
@@ -276,6 +276,23 @@ describe("Audio and coaching", () => {
     expect(reopened.lesson("first").phase).toBe("error");
     expect(reopened.lesson("first").error).toContain("中断");
   });
+});
+
+test("種類のない自分で書いた表現は、空白のない1語を単語、それ以外を文章として読み込む", () => {
+  const db = store();
+  const written = (text: string) =>
+    ({
+      id: text,
+      text,
+      meaning: "",
+      memo: "",
+      createdAt: "",
+      reviewed: false,
+      favorite: true,
+    }) as OwnExpression;
+  db.library.ownExpressions = [written("It can be."), written("probability")];
+  db.save();
+  expect(new Store(db.root).library.ownExpressions?.map((e) => e.kind)).toEqual(["sentence", "word"]);
 });
 
 test("プロフィールの表示名を取り出し、未設定なら名前なしとする", () => {

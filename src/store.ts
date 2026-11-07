@@ -36,6 +36,9 @@ export class Store {
         lesson.error = "前回の処理が中断されました。再分析で保存済み音声から再開できます。";
       }
     }
+    // An expression written without a kind is a word when it has no space, and a sentence otherwise.
+    for (const expression of this.library.ownExpressions ?? [])
+      if (expression.kind === undefined) expression.kind = /\s/.test(expression.text) ? "sentence" : "word";
     this.save();
   }
   path(...parts: string[]): string {
