@@ -31,8 +31,11 @@ export type Run = { start: number; end: number };
 /** A pause is at least this long; the usual threshold in fluency research. */
 const pauseSeconds = 0.25;
 
-/** Stretches of voice between pauses. WebRTC noise suppression leaves near-digital silence between them. */
-async function speechRuns(file: string): Promise<Run[]> {
+/**
+ * Stretches of voice between pauses, taking sound below `noise` dB as silence. WebRTC noise suppression
+ * leaves near-digital silence between them.
+ */
+export async function speechRuns(file: string, noise = -35): Promise<Run[]> {
   const [detected, probed] = await Promise.all([
     command([
       "ffmpeg",
@@ -43,7 +46,7 @@ async function speechRuns(file: string): Promise<Run[]> {
       "-i",
       file,
       "-af",
-      `silencedetect=noise=-35dB:d=${pauseSeconds},ametadata=mode=print:file=-`,
+      `silencedetect=noise=${noise}dB:d=${pauseSeconds},ametadata=mode=print:file=-`,
       "-f",
       "null",
       "-",

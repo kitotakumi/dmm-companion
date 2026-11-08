@@ -18,7 +18,7 @@ type ViewLesson = Omit<Lesson, "tracks" | "audio"> & {
 type Snapshot = Omit<Library, "lessons"> & {
   lessons: ViewLesson[];
   status: { busy: boolean; message: string; error: string };
-  transcription: { queue: string[]; progress: number };
+  transcription: { queue: string[] };
   model: string;
   dataDir: string;
   canSync: boolean;
@@ -196,7 +196,7 @@ function App() {
     <TeacherLines
       transcript={lesson.teacherTranscript}
       error={lesson.teacherTranscriptError}
-      progress={transcriptAt < 0 ? undefined : transcriptAt ? "waiting" : data?.transcription.progress}
+      transcribing={transcriptAt < 0 ? undefined : transcriptAt ? "waiting" : "now"}
       transcribe={() => void act(() => post("/api/transcribe", { ids: [lesson.id] }))}
       load={() => api(`/api/lessons/${lesson.id}/teacher`)}
       play={(at) => play(at)}
@@ -662,7 +662,7 @@ function App() {
         {transcribing && data && (
           <output className="notice progress">
             <span className="pulse" />
-            {transcribing.teacher}先生の発言を書き起こし中（{Math.floor(data.transcription.progress * 100)}%）
+            {transcribing.teacher}先生の発言を書き起こし中
             {data.transcription.queue.length > 1 && (
               <small>ほか{data.transcription.queue.length - 1}件が順番待ち</small>
             )}

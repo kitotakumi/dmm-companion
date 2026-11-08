@@ -21,7 +21,7 @@ export async function promptIdentity(): Promise<LoginIdentity> {
 }
 
 export function hiddenInput(label: string): Promise<string> {
-  if (!process.stdin.isTTY) throw new Error("パスワード入力にはターミナルが必要です。");
+  if (!process.stdin.isTTY) throw new Error("非表示で入力するにはターミナルが必要です。");
   process.stdout.write(label);
   const wasRaw = process.stdin.isRaw;
   process.stdin.setRawMode(true);
