@@ -9,6 +9,7 @@ import { Companion } from "./coach";
 import { MacReviewDelivery } from "./delivery";
 import { type Lesson, safeError } from "./domain";
 import { disableEmailDelivery, enableEmailDelivery, GmailReviewMail, gwsAccount } from "./email";
+import { removeGroqKey, saveGroqKey } from "./groq";
 import { importHar } from "./importer";
 import { liveLockHolder } from "./lock";
 import { diagnoseMacNotifications } from "./notifications";
@@ -46,6 +47,8 @@ if (values.help) {
   dmm analyze [lesson-id... | all]  Geminiで未分析レッスンを振り返る
   dmm measure [lesson-id... | all]  録音のあるレッスンの発話量・流暢さ・語彙を計測
   dmm assess [lesson-id... | all]   録音のあるレッスンのCEFRの目安を判定
+  dmm groq                     先生の発言の書き起こしに使うGroqのAPIキーを保存 (キーは非表示で入力)
+  dmm groq off                 GroqのAPIキーを削除
   dmm auto enable              自動生成・Mac通知を有効化（ログイン時に自動起動）
   dmm auto status              自動実行・配信の状態を表示
   dmm auto doctor              Mac通知の許可・表示設定を診断
@@ -99,9 +102,18 @@ function measureTargets(): string[] {
 async function main(): Promise<void> {
   let action = positionals[0] ?? "serve";
   if (
-    !["serve", "background", "auto", "setup", "sync", "analyze", "measure", "assess", "import-har"].includes(
-      action,
-    )
+    ![
+      "serve",
+      "background",
+      "auto",
+      "groq",
+      "setup",
+      "sync",
+      "analyze",
+      "measure",
+      "assess",
+      "import-har",
+    ].includes(action)
   )
     throw new Error("不明なコマンドです。--helpを確認してください。");
   const port = Number(values.port);
@@ -183,6 +195,20 @@ async function main(): Promise<void> {
         "auto enable / disable / status / run / doctor / test / email / slackを指定してください。",
       );
     action = "auto-run";
+  }
+  if (action === "groq") {
+    if (positionals[1] === "off") {
+      removeGroqKey(root);
+      console.log("GroqのAPIキーを削除しました。");
+      return;
+    }
+    console.log(
+      "https://console.groq.com/keys で作成したAPIキーを貼り付けてください。入力は表示されません。",
+    );
+    // The key is a credential, so it is typed in rather than left in shell history.
+    await saveGroqKey(root, (await hiddenInput("GroqのAPIキー: ")).trim());
+    console.log("GroqのAPIキーを保存しました。先生の発言の書き起こしに使います。");
+    return;
   }
   const lock = join(root, "app.lock");
   if (existsSync(lock)) {

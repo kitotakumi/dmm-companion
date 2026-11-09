@@ -81,8 +81,8 @@ export class Companion {
   private readonly queue: string[] = [];
   private readonly reviewedListeners: ((lesson: Lesson) => void)[] = [];
   status = { busy: false, message: "", error: "" };
-  /** Lessons waiting for a teacher transcript, the first being transcribed, and how far it is (0–1). */
-  readonly transcription = { queue: [] as string[], progress: 0 };
+  /** Lessons waiting for a teacher transcript, the first being transcribed. */
+  readonly transcription = { queue: [] as string[] };
   private transcribing = false;
   constructor(
     readonly store: Store,
@@ -91,7 +91,7 @@ export class Companion {
     private readonly savedLogin: SavedLogin,
     /** Transcribes the learner's voice verbatim for speaking metrics; a fast model is enough. */
     readonly transcriptionModel: string,
-    /** Writes a lesson's teacher transcript; tests replace it to stay off Whisper. */
+    /** Writes a lesson's teacher transcript; tests replace it to stay off Groq. */
     private readonly transcriber = transcribeTeacher,
   ) {}
   async setup(identity: LoginIdentity): Promise<void> {
@@ -251,8 +251,8 @@ export class Companion {
   }
   /**
    * Queues lessons with a teacher recording for a teacher transcript, and returns how many were added.
-   * Whisper runs on this computer without Gemini, so transcripts go beside reviews and syncs, one lesson
-   * at a time; an error is kept on the lesson for a retry.
+   * Groq transcribes without Gemini, so transcripts go beside reviews and syncs, one lesson at a time;
+   * an error is kept on the lesson for a retry.
    */
   transcribe(ids: string[]): number {
     let count = 0;
@@ -277,13 +277,10 @@ export class Companion {
     try {
       for (let id = this.transcription.queue[0]; id; id = this.transcription.queue[0]) {
         const lesson = this.store.lesson(id);
-        this.transcription.progress = 0;
         try {
           // The lines play from the lesson recording, so it is restored first when no review has done so.
           if (!lesson.audio) await this.signedIn(() => prepareAudio(this.store, lesson));
-          await this.transcriber(this.store, lesson, (done) => {
-            this.transcription.progress = done;
-          });
+          await this.transcriber(this.store, lesson);
         } catch (error) {
           lesson.teacherTranscriptError = safeError(error);
           this.store.save();

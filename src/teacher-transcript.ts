@@ -1,63 +1,111 @@
-import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
-import script from "../scripts/transcribe-dialogue.py" with { type: "text" };
 import { speakerAudio } from "./audio";
 import type { Lesson } from "./domain";
-import { command } from "./process";
+import { groqWhisper, readGroqSettings, transcribeWithGroq } from "./groq";
+import { type Run, speechRuns } from "./metrics";
 import { atomicJson, type Store } from "./store";
 
-const whisperSchema = z.object({
-  model: z.string(),
-  lines: z.array(z.object({ start: z.number().finite().nonnegative(), text: z.string() })),
-});
 /** One stretch of the teacher's speech and the second it starts at on the lesson recording. */
 export type TeacherLine = { at: number; text: string };
 
+// Whisper writes in the style of its prompt. Without a punctuated one it can write a whole recording in
+// lowercase without punctuation, which leaves no sentence ends to cut lines at.
+const style = "Hello! How are you today? I'm good, thanks. Let's get started.";
+
 /**
- * Transcribes the teacher's track on this computer with Whisper (scripts/transcribe-dialogue.py, run by
- * uv) for listening review. Whisper times each word on the audio and a line starts at its first word;
- * the track lies on the lesson recording's timeline, so that time seeks the lesson recording directly.
- * `progress` hears how far through the recording it is, from 0 to 1.
+ * Sound below this level, in dB, is silence. WebRTC noise suppression leaves near-digital silence
+ * between the teacher's words, and a softly spoken word stays above it.
  */
-export async function transcribeTeacher(
-  store: Store,
-  lesson: Lesson,
-  progress: (done: number) => void,
-): Promise<void> {
-  if (!Bun.which("uv"))
-    throw new Error(
-      "先生の発言の書き起こしにはuvが必要です。https://docs.astral.sh/uv/ の手順でインストールしてください。",
-    );
+const silence = -45;
+
+/**
+ * Transcribes the teacher's track with Groq's Whisper for listening review. Whisper times each word on
+ * the audio and a line starts at its first word; the track lies on the lesson recording's timeline, so
+ * that time seeks the lesson recording directly.
+ */
+export async function transcribeTeacher(store: Store, lesson: Lesson): Promise<void> {
+  const settings = readGroqSettings(store.root);
+  if (!settings)
+    throw new Error("先生の発言の書き起こしにはGroqのAPIキーが必要です。dmm groqで設定してください。");
   const audio = await speakerAudio(store, lesson, "Teacher");
-  // uv runs a script from a file, so the copy built into this binary is written out first.
-  const runner = store.path("work", "transcribe-dialogue.py");
-  if (!existsSync(runner) || readFileSync(runner, "utf8") !== script) await Bun.write(runner, script);
-  const out = store.path("work", lesson.id, "teacher.whisper.json");
-  await command(["uv", "run", "--script", runner, "--track", `Teacher=${audio}`, "--out", out], {
-    timeout: 3 * 3600_000,
-    onStderr: (line) => {
-      const done = whisperProgress(line);
-      if (done !== undefined) progress(done);
-    },
-  });
-  const { model, lines } = teacherLines(JSON.parse(await Bun.file(out).text()));
+  const [transcription, heard] = await Promise.all([
+    transcribeWithGroq(settings.apiKey, audio, style),
+    speechRuns(audio, silence),
+  ]);
+  // Groq's answer is kept, as the analyses' raw output is, so a surprising transcript can be inspected.
+  atomicJson(store.path("work", lesson.id, "teacher.groq.json"), transcription);
+  const lines = teacherLines(transcription, heard);
   const transcribedAt = new Date().toISOString();
-  atomicJson(store.path("analyses", `${lesson.id}.teacher.json`), { model, transcribedAt, lines });
-  lesson.teacherTranscript = { model, transcribedAt, lines: lines.length };
+  atomicJson(store.path("analyses", `${lesson.id}.teacher.json`), {
+    model: groqWhisper,
+    transcribedAt,
+    lines,
+  });
+  lesson.teacherTranscript = { model: groqWhisper, transcribedAt, lines: lines.length };
   delete lesson.teacherTranscriptError;
   store.save();
 }
 
-/** How far through the recording the script is, from one of its progress lines ("Teacher: 512/1458s"). */
-export function whisperProgress(line: string): number | undefined {
-  const match = /: (\d+)\/(\d+)s$/.exec(line);
-  return match ? Math.min(1, Number(match[1]) / Math.max(1, Number(match[2]))) : undefined;
+const time = z.number().finite().nonnegative();
+const transcriptionSchema = z.object({
+  words: z.array(z.object({ word: z.string(), start: time, end: time })),
+});
+type Word = z.infer<typeof transcriptionSchema>["words"][number];
+
+/** How far, in seconds, a word may lie outside the sound ffmpeg heard and still be kept, as Whisper times words loosely. */
+const loose = 0.5;
+/**
+ * A line starts at its first word within this many seconds of sound. Whisper can put a sentence's first
+ * word in the silence before it, even a minute early.
+ */
+const close = 0.2;
+/** A line holds at most this many words; a longer sentence, or a stretch Whisper wrote without punctuation, is split. */
+const longest = 20;
+/** Splitting leaves no line shorter than this many words, so that no line is a stray word. */
+const shortest = 4;
+/** Seconds a pause after a comma counts beyond its length, so that a long sentence splits at its commas first. */
+const comma = 0.5;
+
+/**
+ * The teacher's lines in Groq's answer: one sentence each, a long one split at its longest pauses. Groq
+ * writes each word with the punctuation after it, so a sentence ends at a word ending in ".", "?" or "!".
+ * Whisper can write a sentence nobody said into a long silence, so words where `heard` finds no sound are
+ * left out.
+ */
+export function teacherLines(transcription: unknown, heard: Run[]): TeacherLine[] {
+  const parsed = transcriptionSchema.safeParse(transcription);
+  if (!parsed.success) throw new Error("Groqの回答に単語ごとの時刻がありません。");
+  const near = (word: Word, margin: number) =>
+    heard.some((run) => word.start < run.end + margin && word.end > run.start - margin);
+  const sentences: Word[][] = [[]];
+  for (const word of parsed.data.words.filter((w) => near(w, loose))) {
+    sentences.at(-1)?.push(word);
+    if (/[.?!]$/.test(word.word)) sentences.push([]);
+  }
+  const lines = sentences.flatMap(split).map((line) => ({
+    at: (line.find((w) => near(w, close)) ?? line[0])?.start ?? 0,
+    text: line.map((w) => w.word).join(" "),
+  }));
+  if (!lines.length) throw new Error("講師の発話を書き起こせませんでした。");
+  return lines;
 }
 
-/** The teacher's lines in the script's output, in speaking order, and the Whisper model that heard them. */
-export function teacherLines(output: unknown): { model: string; lines: TeacherLine[] } {
-  const { model, lines } = whisperSchema.parse(output);
-  const spoken = lines.flatMap((l) => (l.text.trim() ? [{ at: l.start, text: l.text.trim() }] : []));
-  if (!spoken.length) throw new Error("講師の発話を書き起こせませんでした。");
-  return { model, lines: spoken };
+/** The sentence in lines of at most `longest` words, split where it pauses longest. */
+function split(words: Word[]): Word[][] {
+  if (words.length <= longest) return words.length ? [words] : [];
+  const middle = words.length / 2;
+  let at = 0;
+  let pause = Number.NEGATIVE_INFINITY;
+  for (let i = shortest; i <= words.length - shortest; i++) {
+    const before = words[i - 1];
+    const after = words[i];
+    if (!before || !after) continue;
+    const length = after.start - before.end + (/[,;:]$/.test(before.word) ? comma : 0);
+    // Between equal pauses, as in speech Whisper times without gaps, the split nearest the middle is taken.
+    if (length > pause + 1e-6 || (length > pause - 1e-6 && Math.abs(i - middle) < Math.abs(at - middle))) {
+      pause = length;
+      at = i;
+    }
+  }
+  return at ? [...split(words.slice(0, at)), ...split(words.slice(at))] : [words];
 }

@@ -303,16 +303,18 @@ test("先生の発言の書き起こしは振り返りの途中でも受け付�
     "gemini-test",
     noSavedLogin,
     "gemini-test",
-    (_, lesson, progress) => {
-      progress(0.5);
-      return new Promise<void>((resolve, reject) => {
+    (_, lesson) =>
+      new Promise<void>((resolve, reject) => {
         finish.push(() => {
-          if (lesson.id === "b") return reject(new Error("uvが見つかりません。"));
-          lesson.teacherTranscript = { model: "large-v3-turbo", transcribedAt: "2026-01-01", lines: 1 };
+          if (lesson.id === "b") return reject(new Error("GroqのAPIキーが無効です。"));
+          lesson.teacherTranscript = {
+            model: "whisper-large-v3-turbo",
+            transcribedAt: "2026-01-01",
+            lines: 1,
+          };
           resolve();
         });
-      });
-    },
+      }),
   );
   const { server, url } = serve(companion, 0);
   cleanups.push(() => {
@@ -333,16 +335,16 @@ test("先生の発言の書き起こしは振り返りの途中でも受け付�
   const response = await transcribe(["a", "b", "unrestored", "learner"]);
   expect(response.status).toBe(202);
   expect(await response.json()).toEqual({ queued: 3 });
-  expect(await transcription()).toEqual({ queue: ["a", "b", "unrestored"], progress: 0.5 });
+  expect(await transcription()).toEqual({ queue: ["a", "b", "unrestored"] });
   expect(finish).toHaveLength(1);
   finish[0]?.();
   await settled(2);
-  expect(await transcription()).toEqual({ queue: ["b", "unrestored"], progress: 0.5 });
+  expect(await transcription()).toEqual({ queue: ["b", "unrestored"] });
   finish[1]?.();
   await settled(0);
   expect(store.lesson("a").teacherTranscript?.lines).toBe(1);
-  expect(store.lesson("b").teacherTranscriptError).toBe("uvが見つかりません。");
-  // A recording no review has restored is restored before Whisper; this one cannot be, so Whisper never starts.
+  expect(store.lesson("b").teacherTranscriptError).toBe("GroqのAPIキーが無効です。");
+  // A recording no review has restored is restored before transcribing; this one cannot be, so Groq is never asked.
   expect(store.lesson("unrestored").teacherTranscriptError).toBeDefined();
   expect(finish).toHaveLength(2);
 

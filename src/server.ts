@@ -115,7 +115,7 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
           );
           return Response.json({ ok: true }, { status: 202 });
         }
-        // Transcribing runs on this computer beside reviews and syncs, so it is accepted while they run.
+        // Transcribing runs beside reviews and syncs, so it is accepted while they run.
         if (url.pathname === "/api/transcribe" && request.method === "POST") {
           const body = (await request.json()) as { ids?: unknown };
           if (

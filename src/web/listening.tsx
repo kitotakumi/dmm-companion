@@ -7,20 +7,20 @@ type Loaded = { lines: TeacherLine[]; model: string };
 
 /**
  * The teacher's lines for listening review, loaded when opened; each start time plays the recording from
- * there. Until they exist, a button transcribes the teacher on this computer, apart from the review.
+ * there. Until they exist, a button transcribes the teacher with Groq, apart from the review.
  */
 export function TeacherLines({
   transcript,
   error,
-  progress,
+  transcribing,
   transcribe,
   load,
   play,
 }: {
   transcript?: Lesson["teacherTranscript"];
   error?: string;
-  /** How far the transcript is (0–1), "waiting" behind another lesson's, or undefined when not asked for. */
-  progress?: number | "waiting";
+  /** Whether the transcript is being written now or waits behind another lesson's; undefined when not asked for. */
+  transcribing?: "now" | "waiting";
   transcribe: () => void;
   load: () => Promise<Loaded>;
   play: (at: number) => void;
@@ -33,19 +33,17 @@ export function TeacherLines({
         <button
           type="button"
           className="outline-button"
-          disabled={progress !== undefined}
+          disabled={transcribing !== undefined}
           onClick={transcribe}
         >
-          {progress === undefined
+          {transcribing === undefined
             ? "先生の発言を時刻つきで書き起こす"
-            : progress === "waiting"
+            : transcribing === "waiting"
               ? "書き起こしの順番待ち"
-              : progress > 0
-                ? `先生の発言を書き起こし中… ${Math.floor(progress * 100)}%`
-                : "書き起こしを準備中…"}
+              : "先生の発言を書き起こし中…"}
         </button>
-        <small>このPCのWhisperで書き起こします。振り返りとは別に進み、数分〜十数分かかります。</small>
-        {error && progress === undefined && (
+        <small>GroqのWhisperで書き起こします。振り返りとは別に進み、10秒ほどで終わります。</small>
+        {error && transcribing === undefined && (
           <p className="speaking-error">先生の発言の書き起こしに失敗しました: {error}</p>
         )}
       </div>
@@ -76,10 +74,7 @@ export function TeacherLines({
               </li>
             ))}
           </ol>
-          <small>
-            このPCのWhisper（{loaded.model}
-            ）が書き起こした先生の発言です。時刻を押すと、その少し前から再生します。
-          </small>
+          <small>{loaded.model}が書き起こした先生の発言です。時刻を押すと、その少し前から再生します。</small>
         </>
       ) : (
         <p>読み込み中…</p>
