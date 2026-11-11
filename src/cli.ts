@@ -7,13 +7,14 @@ import { AutomaticReviews, readAutomationConfig } from "./automation";
 import { automaticReviewStatus, disableAutomaticReviews, enableAutomaticReviews } from "./background";
 import { Companion } from "./coach";
 import { MacReviewDelivery } from "./delivery";
-import { type Lesson, safeError } from "./domain";
+import { type Lesson, type Library, safeError } from "./domain";
 import { disableEmailDelivery, enableEmailDelivery, GmailReviewMail, gwsAccount } from "./email";
 import { removeGroqKey, saveGroqKey } from "./groq";
 import { importHar } from "./importer";
 import { liveLockHolder } from "./lock";
 import { diagnoseMacNotifications } from "./notifications";
 import { hiddenInput, promptIdentity } from "./prompt";
+import { disableRecords, enableRecords, RecordsSync, readRecordsSettings } from "./records";
 import { savedLoginFor } from "./saved-login";
 import { serve } from "./server";
 import { disableSlackDelivery, enableSlackDelivery, SlackReviewPost } from "./slack";
@@ -49,6 +50,10 @@ if (values.help) {
   dmm assess [lesson-id... | all]   録音のあるレッスンのCEFRの目安を判定
   dmm groq                     先生の発言の書き起こしに使うGroqのAPIキーを保存 (キーは非表示で入力)
   dmm groq off                 GroqのAPIキーを削除
+  dmm records FOLDER           振り返り・書き起こし・ノートをMarkdownでFOLDERのGitリポジトリに書き出し、
+                               更新のたびにcommit・push (非公開リポジトリのみ)
+  dmm records                  記録の書き出し先を表示
+  dmm records off              記録の書き出しを停止
   dmm auto enable              自動生成・Mac通知を有効化（ログイン時に自動起動）
   dmm auto status              自動実行・配信の状態を表示
   dmm auto doctor              Mac通知の許可・表示設定を診断
@@ -107,6 +112,7 @@ async function main(): Promise<void> {
       "background",
       "auto",
       "groq",
+      "records",
       "setup",
       "sync",
       "analyze",
@@ -208,6 +214,34 @@ async function main(): Promise<void> {
     // The key is a credential, so it is typed in rather than left in shell history.
     await saveGroqKey(root, (await hiddenInput("GroqのAPIキー: ")).trim());
     console.log("GroqのAPIキーを保存しました。先生の発言の書き起こしに使います。");
+    return;
+  }
+  if (action === "records") {
+    const folder = positionals[1];
+    if (folder === "off") {
+      disableRecords(root);
+      console.log("記録の書き出しを止めました。書き出し先のフォルダとリポジトリはそのまま残ります。");
+      return;
+    }
+    if (!folder) {
+      const settings = readRecordsSettings(root);
+      console.log(
+        settings
+          ? `記録の書き出し先: ${settings.folder}`
+          : "記録は書き出していません。dmm records FOLDER で始めます。",
+      );
+      return;
+    }
+    const libraryFile = join(root, "library.json");
+    if (!existsSync(libraryFile))
+      throw new Error("まだレッスンがありません。先にdmmで履歴を同期してください。");
+    // Only read here: a running app keeps the library in memory and would overwrite a save from this process.
+    const library = JSON.parse(readFileSync(libraryFile, "utf8")) as Library;
+    // PowerShell passes ~ on to a program as it is.
+    const target = await enableRecords(root, library, folder.replace(/^~(?=$|[\\/])/, homedir()));
+    console.log(
+      `記録を${target}に書き出してpushしました。これからは振り返りや書き起こしが更新されるたびに、起動中のdmmが書き出してpushします。`,
+    );
     return;
   }
   const lock = join(root, "app.lock");
@@ -352,7 +386,8 @@ async function main(): Promise<void> {
     if (automatic.state.error) throw new Error(automatic.state.error);
   }
   if (action === "serve" || action === "background") {
-    const { url } = serve(companion, port, automatic);
+    const records = new RecordsSync(store);
+    const { url } = serve(companion, port, automatic, records);
     atomicJson(store.path("server.json"), { pid: process.pid, url });
     console.log(`DMM Companion: ${url}\n保存先: ${store.root}`);
     const page = new URL(url);
@@ -363,6 +398,7 @@ async function main(): Promise<void> {
       if (store.credentials().dmmCookie) void companion.sync();
       automatic.start();
     }
+    records.start();
   } else
     console.log(
       `保存先: ${store.root}\n履歴 ${store.library.lessons.length}件 / 分析済み ${store.library.lessons.filter((l) => l.feedback).length}件`,

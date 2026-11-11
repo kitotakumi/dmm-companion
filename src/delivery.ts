@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ReviewDelivery } from "./automation";
-import type { Lesson } from "./domain";
+import type { Feedback, Lesson } from "./domain";
 import { sendMacNotification } from "./notifications";
 import type { Store } from "./store";
 import { mapFeedbackProse, plainTimes, youglish } from "./timestamps";
@@ -14,6 +14,20 @@ export function notificationAction(binary: string, root: string, lessonId?: stri
   const args = [binary, "--data-dir", root];
   if (lessonId) args.push("--lesson", lessonId);
   return `/usr/bin/nohup ${args.map(shellQuote).join(" ")} >> ${shellQuote(join(root, "logs", "page.log"))} 2>&1 < /dev/null &`;
+}
+
+/** One expression of a review as Markdown blocks: the heading, the rewrite, what was said, why, and practice. */
+export function expressionMarkdown(e: Feedback["expressions"][number], heading: string): string[] {
+  return [
+    heading,
+    `${e.kind === "comprehension" ? "返し方の例" : "言い直しの例"}: ${e.improved}`,
+    `レッスンでの発話: ${e.original}`,
+    e.explanation,
+    ...(e.kind === "pronunciation" && e.words?.length
+      ? [`ネイティブの発音: ${e.words.map((w) => `[${w}](${youglish(w)})`).join(" ")}`]
+      : []),
+    `次はこの文も: ${e.practice}`,
+  ];
 }
 
 export function reviewMarkdown(lesson: Lesson): string {
@@ -34,16 +48,7 @@ export function reviewMarkdown(lesson: Lesson): string {
     "## 見ずに英語で言ってみる",
     ...feedback.expressions
       .slice(0, 3)
-      .flatMap((e, i) => [
-        `### ${i + 1}. ${e.meaning}`,
-        `${e.kind === "comprehension" ? "返し方の例" : "言い直しの例"}: ${e.improved}`,
-        `レッスンでの発話: ${e.original}`,
-        e.explanation,
-        ...(e.kind === "pronunciation" && e.words?.length
-          ? [`ネイティブの発音: ${e.words.map((w) => `[${w}](${youglish(w)})`).join(" ")}`]
-          : []),
-        `次はこの文も: ${e.practice}`,
-      ]),
+      .flatMap((e, i) => expressionMarkdown(e, `### ${i + 1}. ${e.meaning}`)),
     "## 次のレッスンで使う",
     ...feedback.nextLesson.map((s) => `- ${s}`),
     "## 分析の補足",

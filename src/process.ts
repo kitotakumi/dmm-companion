@@ -13,14 +13,21 @@ export class CommandError extends Error {
 
 export async function command(
   args: string[],
-  options: { cwd?: string; timeout?: number; log?: string } = {},
+  options: { cwd?: string; timeout?: number; log?: string; env?: Record<string, string> } = {},
 ): Promise<string> {
   const executable = args[0];
   if (!executable || !Bun.which(executable))
     throw new Error(`${executable} が見つかりません。インストールしてPATHを確認してください。`);
   const fd = options.log ? openSync(options.log, "w", 0o600) : undefined;
   let timedOut = false;
-  const child = Bun.spawn(args, { cwd: options.cwd, stdin: "ignore", stdout: fd ?? "pipe", stderr: "pipe" });
+  const child = Bun.spawn(args, {
+    cwd: options.cwd,
+    // Variables given are added to the app's own environment, not put in its place.
+    env: options.env && { ...process.env, ...options.env },
+    stdin: "ignore",
+    stdout: fd ?? "pipe",
+    stderr: "pipe",
+  });
   const terminate = () => {
     kill(child);
   };
