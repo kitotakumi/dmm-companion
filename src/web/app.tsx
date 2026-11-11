@@ -29,7 +29,7 @@ type Snapshot = Omit<Library, "lessons"> & {
     error?: string;
   };
   /** Where the records are written, while `dmm records` has them on. */
-  records?: { folder: string; syncedAt?: string; error?: string };
+  records?: { folder?: string; syncedAt?: string; error?: string };
 };
 const token = location.hash.slice(1) || sessionStorage.getItem("companion-token") || "";
 if (token) {

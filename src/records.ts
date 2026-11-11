@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { aspectLabel, aspectMean, cefrScore } from "./cefr";
@@ -9,11 +9,13 @@ import {
   judged,
   judgedPeriods,
   type Measured,
+  measuredLessons,
   measures,
   periodSize,
   recent,
   series,
   trend,
+  unmeasured,
 } from "./growth-measures";
 import { command } from "./process";
 import { speakingFacts } from "./speaking-facts";
@@ -55,11 +57,23 @@ const longDate = (date: string) =>
 /** A time in Japan as 2026-11-11 19:30. Japan keeps no summer time, so it is always UTC+9. */
 const shortDate = (date: string) =>
   new Date(Date.parse(date) + 9 * 3_600_000).toISOString().slice(0, 16).replace("T", " ");
-/** Prose with its references to the recording as plain times, since the records cannot play it. */
-const prose = (text: string) => plainTimes(text).trim();
-/** Prose on one line, for a list item. */
-const flat = (text: string) => prose(text).replace(/\s*\n\s*/g, " ");
+/** A length of the recording, e.g. 26分10秒, which a clock time such as 23:00 beside it cannot be mistaken for. */
+const minutes = (seconds: number) => `${Math.floor(seconds / 60)}分${Math.floor(seconds % 60)}秒`;
+/**
+ * Text with its references to the recording as plain times, since the records cannot play it, and with
+ * `<` escaped so that a phrase such as <be used to> is not taken for HTML.
+ */
+const plain = (text: string) => plainTimes(text).trim().replaceAll("<", "\\<");
+/** Prose with each of its lines a paragraph, since GitHub runs lines of one paragraph together. */
+const prose = (text: string) => plain(text).replace(/\s*\n\s*/g, "\n\n");
+/** Prose on one line, for a list item, a heading or a table cell, its lines kept apart by a slash. */
+const flat = (text: string) => plain(text).replace(/\s*\n\s*/g, " / ");
 const cell = (text: string) => flat(text).replaceAll("|", "\\|");
+/** The way from a lesson's page to the others, and how to read the times in it. */
+const pageGuide = [
+  "[一覧](../README.md) · [ノート](../notebook.md) · [成長の記録](../growth.md)",
+  "文中の 4:37 のような時刻は、録音の先頭からの経過時間です。",
+];
 /** A section folded until opened, as GitHub shows <details>; the blank lines keep its Markdown rendered. */
 const folded = (summary: string, blocks: string[]) =>
   ["<details>", `<summary>${summary}</summary>`, ...blocks, "</details>"].join("\n\n");
@@ -110,11 +124,12 @@ export function lessonMarkdown(lesson: Lesson, saved: SavedAdvice[], transcripts
   const blocks = [
     `# ${flat(feedback?.title || `${lesson.teacher}先生とのレッスン`)}`,
     [
-      longDate(lesson.date),
+      `${longDate(lesson.date)}（日本時間）`,
       `${lesson.teacher}先生`,
-      ...(lesson.audio ? [`${clock(lesson.audio.seconds)}の会話`] : []),
+      ...(lesson.audio ? [`${minutes(lesson.audio.seconds)}の会話`] : []),
     ].join(" · "),
     ...(lesson.topic ? [`トピック: ${flat(lesson.topic)}`] : []),
+    ...pageGuide,
     ...(feedback ? reviewBlocks(lesson, feedback, kept) : []),
     ...(assessment
       ? [
@@ -137,15 +152,13 @@ export function lessonMarkdown(lesson: Lesson, saved: SavedAdvice[], transcripts
             "| --- | --- |",
             ...speakingFacts(metrics).map(([label, value]) => `| ${label} | ${value} |`),
           ].join("\n"),
+          "それぞれの意味と、高いほうと低いほうのどちらが良いかは[成長の記録](../growth.md)にあります。",
         ]
       : []),
     ...(learner
       ? [
           folded(`あなたの発話の書き起こし${metrics ? ` (${metrics.words}語)` : ""}`, [
-            ...learner.transcript
-              .split(/\n+/)
-              .map((line) => line.trim())
-              .filter(Boolean),
+            ...learner.transcript.split(/\n+/).map(flat).filter(Boolean),
             `${learner.model} が言い淀みも含めて書き起こしたものです。`,
           ]),
         ]
@@ -164,9 +177,8 @@ export function lessonMarkdown(lesson: Lesson, saved: SavedAdvice[], transcripts
           prose(feedback.speakerIdentification),
           ...feedback.uncertainties.map(prose),
           [
-            lesson.model,
-            lesson.analyzedAt &&
-              new Date(lesson.analyzedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }),
+            lesson.model && `振り返りのモデル: ${lesson.model}`,
+            lesson.analyzedAt && `分析した日時: ${shortDate(lesson.analyzedAt)}（日本時間）`,
           ]
             .filter(Boolean)
             .join(" · "),
@@ -190,7 +202,13 @@ function reviewBlocks(lesson: Lesson, feedback: Feedback, kept: (text: string) =
     "## 次は、こう言ってみよう。",
     ...feedback.expressions.flatMap((e, i) => {
       const [heading = "", ...rest] = expressionMarkdown(
-        { ...e, explanation: prose(e.explanation) },
+        {
+          ...e,
+          original: flat(e.original),
+          improved: flat(e.improved),
+          explanation: prose(e.explanation),
+          practice: flat(e.practice),
+        },
         `### ${i + 1}. ${flat(e.meaning)}`,
       );
       const marks = [
@@ -223,7 +241,7 @@ function indexMarkdown(pages: Page[]): string {
     "# DMM英会話の記録",
     "レッスンごとの振り返りと書き起こしです。表現とアドバイスは[ノート](notebook.md)に、話す力の推移は[成長の記録](growth.md)にまとめています。",
     rows.length
-      ? ["| 日時 | 先生 | 振り返り | CEFR |", "| --- | --- | --- | --- |", ...rows].join("\n")
+      ? ["| 日時（日本時間） | 先生 | 振り返り | CEFR |", "| --- | --- | --- | --- |", ...rows].join("\n")
       : "まだ振り返りはありません。",
   ].join("\n\n")}\n`;
 }
@@ -241,7 +259,12 @@ function notebookMarkdown(library: Library, files: Map<string, string>): string 
       (l.feedback?.expressions ?? []).map((e, i) => ({
         shelf: "sentence" as const,
         date: l.date,
-        line: `- **${flat(e.improved)}** ${flat(e.meaning)}${marks(Boolean(l.favorites?.includes(i)), l.reviewed.includes(i))} — ${lessonLink(l)}`,
+        // For a listening point, the meaning is of what the teacher said, and the bold line is a reply to it.
+        line: `- ${
+          e.kind === "comprehension"
+            ? `聞き取り: 先生の「${flat(e.original)}」（${flat(e.meaning)}）への返し方 **${flat(e.improved)}**`
+            : `**${flat(e.improved)}** ${flat(e.meaning)}`
+        }${marks(Boolean(l.favorites?.includes(i)), l.reviewed.includes(i))} — ${lessonLink(l)}`,
       })),
     ),
     ...(library.ownExpressions ?? []).map((e) => ({
@@ -281,9 +304,7 @@ const table = (head: string[], rows: string[][]) =>
  * direction that is better, so the figures read the same away from the page.
  */
 function growthMarkdown(library: Library, files: Map<string, string>): string {
-  const measured = library.lessons
-    .filter((l) => l.metrics || l.assessment)
-    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+  const measured = measuredLessons(library.lessons);
   if (!measured.length) return "# 成長の記録\n\nまだ計測したレッスンがありません。\n";
   const day = (lesson: Measured) => {
     const name = shortDate(lesson.date).slice(0, 10);
@@ -308,10 +329,10 @@ function growthMarkdown(library: Library, files: Map<string, string>): string {
   const periods = judgedPeriods(judgements);
   const aspects = Object.keys(periods.at(-1)?.aspects ?? {});
   const aspectNames = aspects.map((a) => aspectLabel[a] ?? a);
-  const failed = library.lessons.filter((l) => l.metricsError && !l.metrics).length;
+  const failed = unmeasured(library.lessons);
   return `${[
     "# 成長の記録",
-    `話す力の推移です。計測・判定したレッスンは${measured.length}件です。話題や教材で1回ごとの値は大きく動くので、直近${recent}回の平均で見ます。${failed ? `計測できなかったレッスンが${failed}件あります。` : ""}`,
+    `話す力の推移です。計測・判定したレッスンは${measured.length}件です。話題や教材で1回ごとの値は大きく動くので、直近${recent}回の平均で見ます。日付は日本時間です。${failed ? `計測できなかったレッスンが${failed}件あります。` : ""}`,
     "## 直近の平均",
     table(["指標", `直近${recent}回の平均`, `前の${recent}回からの変化`], trends),
     measures
@@ -395,17 +416,55 @@ export function recordFiles(root: string, library: Library): Map<string, string>
   return files;
 }
 
-/** The records' own paths in their folder; nothing else there is staged. */
+/** The records' own paths in their folder; nothing else there is staged or committed. */
 const owned = ["README.md", "notebook.md", "growth.md", "lessons"];
+/** What a repository may already hold to take the records: their own files, and what a new repository starts with. */
+const recordsOnly =
+  /^(README\.md|notebook\.md|growth\.md|lessons\/[^/]+\.md|\.gitignore|\.gitattributes|LICENSE(\.\w+)?)$/;
+/** Minutes after which git's index lock is taken as left by a git that was stopped, as when the app was ended mid-commit. */
+const staleLock = 10;
 
 /** Git in the records folder. It never waits for a password, since the app runs without a terminal. */
-const git = (folder: string, ...args: string[]) =>
-  command(["git", "-C", folder, ...args], { env: { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" } });
+const git = (folder: string, args: string[], env: Record<string, string> = {}) =>
+  command(["git", "-C", folder, ...args], {
+    env: { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", ...env },
+  });
+
+/**
+ * The environment for git that reaches the remote: an SSH key that asks for a passphrase makes it fail
+ * rather than wait, unless SSH is set up for git otherwise.
+ */
+async function remoteEnv(folder: string): Promise<Record<string, string>> {
+  const configured =
+    process.env.GIT_SSH_COMMAND ||
+    process.env.GIT_SSH ||
+    (await git(folder, ["config", "--get", "core.sshCommand"]).catch(() => ""));
+  return configured.trim() ? {} : { GIT_SSH_COMMAND: "ssh -o BatchMode=yes" };
+}
 
 /** Names what a commit changes, e.g. "Update 2026-11-11-1930, README". */
 function commitMessage(paths: string[]): string {
   const names = paths.map((p) => p.replace(/^lessons\//, "").replace(/\.md$/, ""));
   return `Update ${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""}`;
+}
+
+/** Writes the records into the folder and commits the files that changed; returns whether it committed. */
+async function commitRecords(folder: string, files: Map<string, string>): Promise<boolean> {
+  mkdirSync(join(folder, "lessons"), { recursive: true });
+  for (const name of readdirSync(join(folder, "lessons")))
+    if (name.endsWith(".md") && !files.has(`lessons/${name}`)) rmSync(join(folder, "lessons", name));
+  for (const [path, content] of files) {
+    const file = join(folder, path);
+    if (!existsSync(file) || readFileSync(file, "utf8") !== content) writeFileSync(file, content);
+  }
+  await git(folder, ["add", "--all", "--", ...owned]);
+  const changed = (await git(folder, ["diff", "--cached", "--name-only", "--", ...owned]))
+    .split(/\r?\n/)
+    .filter(Boolean);
+  // Naming the paths keeps anything else staged in the folder out of the commit.
+  if (changed.length)
+    await git(folder, ["commit", "--quiet", "--message", commitMessage(changed), "--", ...changed]);
+  return changed.length > 0;
 }
 
 /**
@@ -415,26 +474,35 @@ function commitMessage(paths: string[]): string {
  */
 export async function syncRecords(root: string, library: Library, folder: string): Promise<boolean> {
   if (!existsSync(folder)) throw new Error(`記録の書き出し先のフォルダがありません: ${folder}`);
+  const lock = join(folder, ".git", "index.lock");
+  if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs > staleLock * 60_000) rmSync(lock);
   const files = recordFiles(root, library);
-  mkdirSync(join(folder, "lessons"), { recursive: true });
-  for (const name of readdirSync(join(folder, "lessons")))
-    if (name.endsWith(".md") && !files.has(`lessons/${name}`)) rmSync(join(folder, "lessons", name));
-  for (const [path, content] of files) {
-    const file = join(folder, path);
-    if (!existsSync(file) || readFileSync(file, "utf8") !== content) writeFileSync(file, content);
-  }
-  await git(folder, "add", "--all", "--", ...owned);
-  const changed = (await git(folder, "diff", "--cached", "--name-only", "--", ...owned))
-    .split(/\r?\n/)
-    .filter(Boolean);
-  if (changed.length) await git(folder, "commit", "--quiet", "--message", commitMessage(changed));
+  let committed = await commitRecords(folder, files);
   // Without an upstream the branch has never been pushed.
-  const unpushed = await git(folder, "rev-list", "--count", "@{upstream}..HEAD").then(
+  const unpushed = await git(folder, ["rev-list", "--count", "@{upstream}..HEAD"]).then(
     (count) => Number(count.trim()) > 0,
     () => true,
   );
-  if (unpushed) await git(folder, "push", "--quiet", "--set-upstream", "origin", "HEAD");
-  return changed.length > 0;
+  if (!unpushed) return committed;
+  const env = await remoteEnv(folder);
+  const push = () => git(folder, ["push", "--quiet", "--set-upstream", "origin", "HEAD"], env);
+  try {
+    await push();
+  } catch (error) {
+    // A push is refused when the repository moved on elsewhere, as when a page was edited on GitHub. Its
+    // history is taken in, keeping the records as written here, and the push is tried once more.
+    const fetched = await git(folder, ["fetch", "--quiet", "origin"], env)
+      .then(() => git(folder, ["rev-parse", "--verify", "--quiet", "@{upstream}"]))
+      .then(
+        () => true,
+        () => false,
+      );
+    if (!fetched) throw error;
+    await git(folder, ["merge", "--quiet", "--no-edit", "--strategy-option", "ours", "@{upstream}"]);
+    committed = (await commitRecords(folder, files)) || committed;
+    await push();
+  }
+  return committed;
 }
 
 /** Whether `inner` is `outer` or lies inside it. */
@@ -443,37 +511,75 @@ function within(outer: string, inner: string): boolean {
   return path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
-/** Whether GitHub shows the folder's repository as public; without gh, or off GitHub, it cannot tell. */
-async function publicOnGitHub(folder: string): Promise<boolean> {
-  if (!Bun.which("gh")) return false;
-  const answer = await command(["gh", "repo", "view", "--json", "isPrivate", "--jq", ".isPrivate"], {
-    cwd: folder,
-  }).catch(() => "");
-  return answer.trim() === "false";
+/**
+ * Whether GitHub shows the repository at `url` as public, or undefined when it cannot be asked: without
+ * gh, or for a repository elsewhere. A GitHub repository whose setting gh cannot read is not taken as private.
+ */
+export async function publicOnGitHub(url: string): Promise<boolean | undefined> {
+  const repository = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url);
+  if (!repository || !Bun.which("gh")) return undefined;
+  const answer = (
+    await command([
+      "gh",
+      "repo",
+      "view",
+      `${repository[1]}/${repository[2]}`,
+      "--json",
+      "isPrivate",
+      "--jq",
+      ".isPrivate",
+    ]).catch(() => "")
+  ).trim();
+  if (answer !== "true" && answer !== "false")
+    throw new Error(
+      "GitHubでリポジトリの公開設定を確かめられませんでした。gh auth statusでログインを確かめてください。",
+    );
+  return answer === "false";
 }
 
+/** The URL of the repository the records are pushed to. */
+const originOf = async (folder: string) =>
+  (await git(folder, ["remote", "get-url", "origin"]).catch(() => "")).trim();
+
 /**
- * Starts writing the records into `folder`, the top of a clone of the repository they go to, kept apart
- * from the data. The settings are saved only once a first sync has pushed. A repository GitHub shows as
- * public is refused, since the records hold the teacher's words and what the learner said.
+ * Starts writing the records into `folder`, the top of a clone of a repository kept for them, apart from
+ * the data. The settings are saved only once a first sync has pushed. A repository GitHub shows as public
+ * is refused, since the records hold the teacher's words and what the learner said.
  */
 export async function enableRecords(
   root: string,
   library: Library,
   folder: string,
-  isPublic = publicOnGitHub,
+  isPublic: (url: string) => Promise<boolean | undefined> = publicOnGitHub,
 ): Promise<string> {
   const target = resolve(folder);
-  const top = existsSync(target) ? await git(target, "rev-parse", "--show-toplevel").catch(() => "") : "";
+  const top = existsSync(target) ? await git(target, ["rev-parse", "--show-toplevel"]).catch(() => "") : "";
   if (!top.trim() || relative(resolve(top.trim()), target) !== "")
     throw new Error("書き出し先には、Gitリポジトリのいちばん上のフォルダを指定してください。");
   if (within(target, resolve(root)) || within(resolve(root), target))
     throw new Error("書き出し先は、dmmの保存先と重ならないフォルダにしてください。");
-  if (!(await git(target, "remote")).split(/\r?\n/).includes("origin"))
+  if (
+    !(await git(target, ["symbolic-ref", "--quiet", "HEAD"]).then(
+      () => true,
+      () => false,
+    ))
+  )
+    throw new Error("書き出し先のリポジトリで、pushするブランチに切り替えてください。");
+  // The records replace README.md and remove the lessons/*.md they did not write, so a repository that
+  // holds anything else is never theirs to write into.
+  const others = (await git(target, ["ls-files", "-z"]))
+    .split("\0")
+    .filter((path) => path && !recordsOnly.test(path));
+  if (others.length)
+    throw new Error(
+      `書き出し先には、記録のためだけのリポジトリを指定してください。ほかのファイル（${others.slice(0, 3).join("、")}など）があります。`,
+    );
+  const origin = await originOf(target);
+  if (!origin)
     throw new Error(
       "書き出し先のリポジトリにoriginがありません。push先のリポジトリをoriginに設定してください。",
     );
-  if (await isPublic(target))
+  if (await isPublic(origin))
     throw new Error(
       "公開リポジトリには書き出せません。先生の発言も入るので、非公開のリポジトリを指定してください。",
     );
@@ -486,6 +592,8 @@ export async function enableRecords(
 const settle = 30;
 /** Minutes before a failed sync is tried again when nothing else is saved. */
 const retry = 10;
+/** Hours a repository found private is trusted before GitHub is asked again. */
+const recheck = 6;
 
 /**
  * Keeps the records in step with the library while the app runs: each save brings a sync after a short
@@ -495,18 +603,26 @@ export class RecordsSync {
   private timer?: ReturnType<typeof setTimeout>;
   private syncing: Promise<void> = Promise.resolve();
   private state: { syncedAt?: string; error?: string } = {};
+  /** The origin last found private, and when. */
+  private checked = { origin: "", at: 0 };
   constructor(
     private readonly store: Store,
     private readonly wait = settle * 1000,
+    private readonly isPublic: (url: string) => Promise<boolean | undefined> = publicOnGitHub,
   ) {}
   start(): void {
     this.store.onSave(() => this.schedule(this.wait));
     this.schedule(0);
   }
   /** Where the records go and how the last sync went, or undefined while they are off. */
-  snapshot() {
-    const settings = readRecordsSettings(this.store.root);
-    return settings && { folder: settings.folder, ...this.state };
+  snapshot(): { folder?: string; syncedAt?: string; error?: string } | undefined {
+    try {
+      const settings = readRecordsSettings(this.store.root);
+      return settings && { folder: settings.folder, ...this.state };
+    } catch (error) {
+      // An unreadable records.json must not take the rest of the page down with it.
+      return { error: `records.jsonを読めません: ${safeError(error)}` };
+    }
   }
   /** Syncs once any sync already running has finished; a failure is kept for the page and tried again. */
   sync(): Promise<void> {
@@ -514,6 +630,7 @@ export class RecordsSync {
       try {
         const settings = readRecordsSettings(this.store.root);
         if (!settings) return;
+        await this.stillPrivate(settings.folder);
         await syncRecords(this.store.root, this.store.library, settings.folder);
         this.state = { syncedAt: new Date().toISOString() };
       } catch (error) {
@@ -524,6 +641,16 @@ export class RecordsSync {
     });
     this.syncing = pass;
     return pass;
+  }
+  /** Stops the records reaching a repository made public, or another origin set, since it was last checked. */
+  private async stillPrivate(folder: string): Promise<void> {
+    const origin = await originOf(folder);
+    if (origin === this.checked.origin && Date.now() - this.checked.at < recheck * 3_600_000) return;
+    if (await this.isPublic(origin))
+      throw new Error(
+        "書き出し先が公開リポジトリになっているため、書き出しを止めています。非公開に戻すか、dmm records offで止めてください。",
+      );
+    this.checked = { origin, at: Date.now() };
   }
   private schedule(delay: number): void {
     clearTimeout(this.timer);

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { criteria } from "../src/assessment";
@@ -39,13 +39,17 @@ function clone(): { folder: string; remote: string } {
   const folder = join(base, "records");
   git("init", "--quiet", "--bare", remote);
   git("clone", "--quiet", remote, folder);
+  identify(folder);
+  return { folder, remote };
+}
+/** Lets a test repository commit whatever the user's own git settings are. */
+function identify(folder: string): void {
   for (const [key, value] of [
     ["user.name", "Test"],
     ["user.email", "test@example.com"],
     ["commit.gpgsign", "false"],
   ] as const)
     git("-C", folder, "config", key, value);
-  return { folder, remote };
 }
 async function until(done: () => boolean): Promise<void> {
   for (let i = 0; i < 100 && !done(); i++) await Bun.sleep(100);
@@ -120,7 +124,12 @@ test("レッスンのページは振り返り・CEFR・話し方・書き起こ�
       assessment: {
         source: "native_audio",
         criteria: [
-          { criterion: "range", evidence: "[3:10]で言い換えた", level: "B1", nextStep: "理由を足す" },
+          {
+            criterion: "range",
+            evidence: "[3:10]で言い換えた\n・<be used to>を使えた",
+            level: "B1",
+            nextStep: "理由を足す",
+          },
         ],
         overall: { rationale: "おおむねB1", level: "B1" },
         caveats: ["講師が多く話した"],
@@ -154,7 +163,7 @@ test("レッスンのページは振り返り・CEFR・話し方・書き起こ�
     },
   );
   expect(page).toStartWith(
-    "# Weekend plans\n\n2026年9月12日(土) 10:00 · Tutor先生 · 26:10の会話\n\n0:18で週末",
+    "# Weekend plans\n\n2026年9月12日(土) 10:00（日本時間） · Tutor先生 · 26分10秒の会話\n\n[一覧](../README.md) · [ノート](../notebook.md) · [成長の記録](../growth.md)\n\n文中の 4:37 のような時刻は、録音の先頭からの経過時間です。\n\n0:18で週末",
   );
   expect(page).toContain("## 次の一歩\n\n- Past tense 1:05 ★\n- Ask back\n\n");
   expect(page).toContain(
@@ -164,7 +173,7 @@ test("レッスンのページは振り返り・CEFR・話し方・書き起こ�
     "### 2. 30\n\n発音\n\n言い直しの例: thirty\n\nレッスンでの発話: thirty\n\n/θ/が/s/に聞こえる\n\nネイティブの発音: [thirty](https://youglish.com/pronounce/thirty/english/us)",
   );
   expect(page).toContain(
-    "## CEFRの目安 B1\n\nおおむねB1\n\n### 表現の幅 B1\n\n根拠: 3:10で言い換えた\n\n次へ: 理由を足す ★\n\n- 講師が多く話した\n\n25分の会話1回分から gemini-test が判定した目安です。",
+    "## CEFRの目安 B1\n\nおおむねB1\n\n### 表現の幅 B1\n\n根拠: 3:10で言い換えた\n\n・\\<be used to>を使えた\n\n次へ: 理由を足す ★\n\n- 講師が多く話した\n\n25分の会話1回分から gemini-test が判定した目安です。",
   );
   expect(page).toContain("| 話した割合 | 31% |\n| 1回の発言 | 7.5秒 |");
   expect(page).toContain(
@@ -172,7 +181,7 @@ test("レッスンのページは振り返り・CEFR・話し方・書き起こ�
   );
   expect(page).toContain("<summary>先生の発言 (1行)</summary>\n\n- 0:20 So you said\n\n");
   expect(page).toEndWith(
-    "## 分析の補足\n\nIdentified by the tracks\n\nNoise at 2:00\n\ngemini-test · 2026/9/12 11:00:00\n",
+    "## 分析の補足\n\nIdentified by the tracks\n\nNoise at 2:00\n\n振り返りのモデル: gemini-test · 分析した日時: 2026-09-12 11:00（日本時間）\n",
   );
 });
 
@@ -238,6 +247,31 @@ test("結果のあるレッスンだけをページにし、一覧とノート�
   );
   expect(notebook).toContain("## 単語\n\n- **relieved** ほっとした ★ — 自分で書いた表現\n\n");
   expect(notebook).toEndWith(`## アドバイス\n\n- Use the past tense — 次のレッスンへ · ${from}\n`);
+});
+
+test("ノートの聞き取りの項目は、先生の発言とその意味に、返し方を添えて書く", () => {
+  const listening: Feedback = {
+    ...feedback,
+    expressions: [
+      {
+        kind: "comprehension",
+        at: 61,
+        original: "He's still alive?",
+        improved: "No, he passed away.",
+        meaning: "彼はまだ生きていますか？",
+        explanation: "Yeahとだけ返した",
+        practice: "Sorry, could you say that again?",
+        confidence: "medium",
+      },
+    ],
+  };
+  const files = recordFiles(
+    temporary(),
+    library([lesson("a", "2026-09-12T01:00:00.000Z", { feedback: listening })]),
+  );
+  expect(files.get("notebook.md")).toContain(
+    "- 聞き取り: 先生の「He's still alive?」（彼はまだ生きていますか？）への返し方 **No, he passed away.** — [2026-09-12 Tutor先生](lessons/2026-09-12-1000.md)",
+  );
 });
 
 test("成長の記録は画面と同じ計算で、直近4回の平均と前の4回からの変化、CEFRの推移、レッスンごとの値を並べる", () => {
@@ -310,6 +344,9 @@ test(
     expect(await syncRecords(root, records, folder)).toBe(false);
     expect(git("--git-dir", remote, "rev-list", "--count", "HEAD")).toBe("1");
 
+    // A file the user staged in the folder stays out of the records' commits.
+    writeFileSync(join(folder, "staged.txt"), "staged by hand");
+    git("-C", folder, "add", "staged.txt");
     const first = records.lessons[0];
     if (first) delete first.feedback;
     expect(await syncRecords(root, records, folder)).toBe(true);
@@ -324,10 +361,14 @@ test(
 test(
   "書き出し先は保存先と重ならないリポジトリのいちばん上だけで、公開リポジトリは断り、pushできてから設定を保存する",
   async () => {
-    const { folder } = clone();
+    const { folder, remote } = clone();
     const root = temporary();
     const empty = library([]);
-    const isPrivate = async () => false;
+    const asked: string[] = [];
+    const isPrivate = async (url: string) => {
+      asked.push(url);
+      return false;
+    };
     await expect(enableRecords(root, empty, temporary(), isPrivate)).rejects.toThrow("いちばん上のフォルダ");
     mkdirSync(join(folder, "inner"));
     await expect(enableRecords(root, empty, join(folder, "inner"), isPrivate)).rejects.toThrow(
@@ -337,12 +378,29 @@ test(
     const unlinked = temporary();
     git("init", "--quiet", unlinked);
     await expect(enableRecords(root, empty, unlinked, isPrivate)).rejects.toThrow("originがありません");
+    // A repository that holds other files, or has no branch checked out, is not one kept for the records.
+    const notes = temporary();
+    git("init", "--quiet", notes);
+    identify(notes);
+    writeFileSync(join(notes, "notes.txt"), "mine");
+    git("-C", notes, "add", "notes.txt");
+    git("-C", notes, "commit", "--quiet", "--message", "notes");
+    git("-C", notes, "remote", "add", "origin", remote);
+    await expect(enableRecords(root, empty, notes, isPrivate)).rejects.toThrow("記録のためだけのリポジトリ");
+    git("-C", notes, "checkout", "--quiet", "--detach");
+    await expect(enableRecords(root, empty, notes, isPrivate)).rejects.toThrow("ブランチに切り替えて");
     await expect(enableRecords(root, empty, folder, async () => true)).rejects.toThrow(
       "公開リポジトリには書き出せません",
     );
+    await expect(
+      enableRecords(root, empty, folder, async () => {
+        throw new Error("公開設定を確かめられませんでした");
+      }),
+    ).rejects.toThrow("確かめられませんでした");
     expect(readRecordsSettings(root)).toBeUndefined();
 
     expect(await enableRecords(root, empty, folder, isPrivate)).toBe(resolve(folder));
+    expect(asked.at(-1)).toBe(remote);
     expect(readRecordsSettings(root)?.folder).toBe(resolve(folder));
     disableRecords(root);
     expect(readRecordsSettings(root)).toBeUndefined();
@@ -370,6 +428,57 @@ test(
     await until(() => commits() === "2");
     expect(commits()).toBe("2");
     expect(records.snapshot()).toEqual({ folder, syncedAt: expect.any(String) });
+  },
+  slow,
+);
+
+test(
+  "ほかでpushされていても取り込んでから記録をpushし、止められたgitが残したロックは片づける",
+  async () => {
+    const { folder, remote } = clone();
+    const root = temporary();
+    const records = library([lesson("a", "2026-09-12T01:00:00.000Z", { feedback })]);
+    await syncRecords(root, records, folder);
+    // The repository moves on elsewhere: README.md is edited and a file added, as on GitHub.
+    const elsewhere = join(temporary(), "elsewhere");
+    git("clone", "--quiet", remote, elsewhere);
+    identify(elsewhere);
+    writeFileSync(join(elsewhere, "README.md"), "edited elsewhere\n");
+    writeFileSync(join(elsewhere, "extra.md"), "added elsewhere\n");
+    git("-C", elsewhere, "add", "--all");
+    git("-C", elsewhere, "commit", "--quiet", "--message", "edit elsewhere");
+    git("-C", elsewhere, "push", "--quiet");
+    const lock = join(folder, ".git", "index.lock");
+    writeFileSync(lock, "");
+    const hourAgo = new Date(Date.now() - 3_600_000);
+    utimesSync(lock, hourAgo, hourAgo);
+
+    const first = records.lessons[0];
+    if (first) first.favorites = [0];
+    expect(await syncRecords(root, records, folder)).toBe(true);
+    expect(git("--git-dir", remote, "ls-tree", "-r", "--name-only", "HEAD").split("\n")).toContain(
+      "extra.md",
+    );
+    expect(git("--git-dir", remote, "show", "HEAD:README.md")).toBe(
+      (recordFiles(root, records).get("README.md") ?? "").trim(),
+    );
+  },
+  slow,
+);
+
+test(
+  "書き出し先が公開されたら書き出しを止め、records.jsonが読めなくてもページの情報は返す",
+  async () => {
+    const { folder, remote } = clone();
+    const store = new Store(temporary());
+    store.library.lessons.push(lesson("a", "2026-09-12T01:00:00.000Z", { feedback }));
+    atomicJson(store.path("records.json"), { version: 1, folder, enabledAt: new Date().toISOString() });
+    const records = new RecordsSync(store, 50, async () => true);
+    await records.sync();
+    expect(records.snapshot()?.error).toContain("公開リポジトリになっているため");
+    expect(git("--git-dir", remote, "rev-list", "--count", "--all")).toBe("0");
+    writeFileSync(store.path("records.json"), "{");
+    expect(records.snapshot()?.error).toContain("records.jsonを読めません");
   },
   slow,
 );

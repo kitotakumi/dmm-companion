@@ -7,11 +7,13 @@ import {
   judgedPeriods,
   type Measure,
   type Measured,
+  measuredLessons,
   measures,
   periodSize,
   recent,
   series,
   trend,
+  unmeasured,
 } from "../growth-measures";
 
 const day = (date: string) =>
@@ -203,10 +205,8 @@ export function Growth({
   lessons: Pick<Lesson, "id" | "date" | "teacher" | "metrics" | "metricsError" | "assessment">[];
   onOpen: (id: string) => void;
 }) {
-  const measured = lessons
-    .filter((l) => l.metrics || l.assessment)
-    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
-  const failed = lessons.filter((l) => l.metricsError && !l.metrics).length;
+  const measured = measuredLessons(lessons);
+  const failed = unmeasured(lessons);
   return (
     <section className="growth">
       <div className="section-heading">

@@ -4,6 +4,18 @@ import type { Lesson, SpeakingMetrics } from "./domain";
 /** How the learner's speaking changes across lessons, figured alike for the growth view and the exported records. */
 export type Measured = Pick<Lesson, "id" | "date" | "teacher" | "metrics" | "assessment">;
 
+/** The lessons the growth view follows, oldest first: those with speaking metrics or a CEFR estimate. */
+export function measuredLessons<T extends Measured>(lessons: T[]): T[] {
+  return lessons
+    .filter((l) => l.metrics || l.assessment)
+    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+}
+
+/** How many lessons could not be measured, which the growth view mentions under its figures. */
+export function unmeasured(lessons: Pick<Lesson, "metrics" | "metricsError">[]): number {
+  return lessons.filter((l) => l.metricsError && !l.metrics).length;
+}
+
 /** Reads a metric off a lesson that has speaking metrics. */
 const fromMetrics =
   (read: (m: SpeakingMetrics) => number | null) =>
