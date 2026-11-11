@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { SpeakingMetrics } from "../domain";
+import { speakingFacts } from "../speaking-facts";
 
 /** This lesson's speaking metrics, and the learner's verbatim transcript loaded when opened. */
 export function LessonSpeaking({
@@ -14,14 +15,7 @@ export function LessonSpeaking({
   const [transcript, setTranscript] = useState<{ transcript: string; model: string }>();
   const [failure, setFailure] = useState("");
   if (!metrics) return error ? <p className="speaking-error">発話の計測に失敗しました: {error}</p> : null;
-  const facts = [
-    ["話した割合", `${(metrics.talkShare * 100).toFixed(0)}%`],
-    ["1回の発言", `${metrics.meanTurnSeconds.toFixed(1)}秒`],
-    ["途切れずに", `${metrics.meanLengthOfRun.toFixed(1)}語`],
-    ["速さ", `${metrics.wordsPerMinute.toFixed(0)}語/分`],
-    ["語彙の多様さ", metrics.mattr === null ? "—" : metrics.mattr.toFixed(2)],
-    ["uh・um", `${metrics.fillersPerMinute.toFixed(1)}回/分`],
-  ];
+  const facts = speakingFacts(metrics);
   return (
     <div className="speaking">
       <span className="eyebrow">HOW YOU SPOKE</span>

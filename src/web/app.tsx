@@ -28,6 +28,8 @@ type Snapshot = Omit<Library, "lessons"> & {
     nextCheckAt?: string;
     error?: string;
   };
+  /** Where the records are written, while `dmm records` has them on. */
+  records?: { folder?: string; syncedAt?: string; error?: string };
 };
 const token = location.hash.slice(1) || sessionStorage.getItem("companion-token") || "";
 if (token) {
@@ -595,6 +597,11 @@ function App() {
         {(error || data?.status.error) && (
           <div className="notice error" role="alert">
             {error || data?.status.error}
+          </div>
+        )}
+        {data?.records?.error && (
+          <div className="notice error" role="alert">
+            記録の書き出しに失敗しました: {data.records.error}
           </div>
         )}
         <section className="hero">

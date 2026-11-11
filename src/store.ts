@@ -12,6 +12,7 @@ export function atomicJson(path: string, value: unknown): void {
 export class Store {
   readonly root: string;
   readonly library: Library;
+  private readonly saved: (() => void)[] = [];
   constructor(root: string) {
     this.root = resolve(root);
     for (const dir of ["", "chunks", "audio", "sources", "analyses", "work"])
@@ -61,6 +62,11 @@ export class Store {
         analyzed: this.library.lessons.filter((l) => l.feedback).length,
       },
     });
+    for (const listener of this.saved) listener();
+  }
+  /** Calls back after each save of the library, such as to bring the exported records up to date. */
+  onSave(listener: () => void): void {
+    this.saved.push(listener);
   }
   lesson(id: string): Lesson {
     const lesson = this.library.lessons.find((l) => l.id === id || l.bookingId === id);

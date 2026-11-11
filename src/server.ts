@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AutomaticReviews } from "./automation";
 import type { Companion } from "./coach";
 import { type Lesson, type OwnExpression, ownExpressionFields, type SavedAdvice, safeError } from "./domain";
+import type { RecordsSync } from "./records";
 import index from "./web/index.html";
 
 /** A change to an expression the learner wrote: rewritten fields, or its reviewed and favorite marks. */
@@ -22,7 +23,12 @@ function adviceIn(lesson: Lesson): Pick<SavedAdvice, "from" | "text">[] {
   ];
 }
 
-export function serve(companion: Companion, port: number, automatic?: AutomaticReviews) {
+export function serve(
+  companion: Companion,
+  port: number,
+  automatic?: AutomaticReviews,
+  records?: RecordsSync,
+) {
   const token = randomBytes(24).toString("hex");
   const store = companion.store;
   const server = Bun.serve({
@@ -71,6 +77,7 @@ export function serve(companion: Companion, port: number, automatic?: AutomaticR
               dataDir: store.root,
               canSync: Boolean(store.credentials().dmmCookie),
               automation: automatic?.snapshot(),
+              records: records?.snapshot(),
             },
             { headers: { "Cache-Control": "no-store" } },
           );
