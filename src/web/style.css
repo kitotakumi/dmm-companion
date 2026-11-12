@@ -1149,7 +1149,7 @@ footer {
     padding: 0 70px;
   }
   .journal {
-    grid-template-columns: 330px 1fr;
+    grid-template-columns: 330px minmax(0, 1fr);
   }
   .reflection {
     padding: 35px 48px;
@@ -1169,7 +1169,7 @@ footer {
     padding: 0 28px;
   }
   .journal {
-    grid-template-columns: 230px 1fr;
+    grid-template-columns: 230px minmax(0, 1fr);
   }
   .lesson-row {
     gap: 9px;
@@ -1271,7 +1271,7 @@ footer {
     flex-wrap: wrap;
   }
   .journal {
-    grid-template-columns: 235px 1fr;
+    grid-template-columns: 235px minmax(0, 1fr);
   }
 }
 @media (max-width: 620px) {
@@ -1381,7 +1381,7 @@ footer {
     font-size: 9px;
   }
   .journal {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .lesson-list {
     border-right: 0;
@@ -1666,6 +1666,7 @@ footer {
 .speaking-error {
   font-size: 10px;
   color: var(--accent);
+  overflow-wrap: anywhere;
 }
 .teacher-lines {
   margin: 10px 0 0;
