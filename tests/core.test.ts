@@ -202,6 +202,28 @@ describe("HAR and DMM protocol", () => {
     await expect(syncHistory(db, () => {})).rejects.toThrow("履歴が不足");
     expect(db.library.coverage.complete).toBe(false);
   });
+  test("レッスンノートのないレッスンは取り込まず、DMMの総件数との照合では数える", async () => {
+    const db = store();
+    db.saveCredentials({ dmmCookie: "session=test" });
+    // A これ聞いてeKnow? session is listed with its teacher and booking, but without a lesson note.
+    const withoutNote = history().replace(
+      /<div id="contents">.*<\/div>/,
+      '<div id="contents"><header>2026年9月12日（土） 11:30 - 11:55</header><dt id="en">Advisor</dt><a href="/teacher/eknow/1/">Advisor</a><a href="https://eikaiwa.dmm.com/app/lesson-booking/CCCCCCCCCCCCCbooking03">Room</a></div>',
+    );
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.searchParams.get("history_date") === "202608") return new Response(history("202608", false));
+      return new Response(
+        (url.searchParams.has("page")
+          ? withoutNote
+          : `${history()}<a href="/lesson?history_date=202609&amp;page=2">2</a>`) +
+          '<p class="txt-total">2件中</p>',
+      );
+    }) as unknown as typeof fetch;
+    await syncHistory(db, () => {});
+    expect(db.library.lessons.map((l) => l.noteId)).toEqual(["12"]);
+    expect(db.library.coverage.complete).toBe(true);
+  });
 });
 
 describe("Audio and coaching", () => {
