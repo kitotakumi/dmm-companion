@@ -140,6 +140,8 @@ export async function syncHistory(
           store.merge(lesson);
           monthLessons.add(lesson.noteId ?? lesson.id);
         }
+        // Lessons without a lesson note are not kept, but DMM's total counts them.
+        for (const start of page.withoutNote) monthLessons.add(start);
         if (page.total !== undefined) expectedTotal = page.total;
         pending.push(...page.next.filter((p) => !visited.has(p)));
         store.save();

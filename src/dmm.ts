@@ -15,6 +15,11 @@ import { hash } from "./store";
 
 export function parseHistory(html: string): {
   lessons: Lesson[];
+  /**
+   * When each lesson listed without a lesson note, such as a これ聞いてeKnow? session, starts, as DMM
+   * writes it. These are not read as lessons, but DMM counts them in the month's total.
+   */
+  withoutNote: string[];
   months: string[];
   selected: string;
   next: string[];
@@ -29,16 +34,20 @@ export function parseHistory(html: string): {
     .filter((v) => /^\d{6}$/.test(v));
   const selected = $("select[name=history_date] option[selected]").attr("value") ?? "";
   const lessons: Lesson[] = [];
+  const withoutNote: string[] = [];
   for (const node of $("[id=contents]").toArray()) {
     const row = $(node);
     const noteId = /\/lesson\/note\/(\d+)\/view/.exec(
       row.find("a[href*='/lesson/note/']").attr("href") ?? "",
     )?.[1];
-    if (!noteId) continue;
+    const dateMatch = /(\d{4})年\s*(\d+)月\s*(\d+)日[^\d]*(\d+):(\d+)/.exec(row.find("header").text());
+    if (!noteId) {
+      if (dateMatch) withoutNote.push(dateMatch[0]);
+      continue;
+    }
     const short = /\/app\/lesson-booking\/([\w-]+)/.exec(
       row.find("a[href*='/app/lesson-booking/']").attr("href") ?? "",
     )?.[1];
-    const dateMatch = /(\d{4})年\s*(\d+)月\s*(\d+)日[^\d]*(\d+):(\d+)/.exec(row.find("header").text());
     if (!dateMatch) throw new Error("履歴の日付を解釈できません。");
     const [, year, month, day, hour, minute] = dateMatch;
     const date = new Date(
@@ -63,7 +72,7 @@ export function parseHistory(html: string): {
     });
   }
   const expected = /(\d+)件中/.exec($(".txt-total").text())?.[1];
-  if (expected && Number(expected) > 0 && !lessons.length)
+  if (expected && Number(expected) > 0 && !lessons.length && !withoutNote.length)
     throw new Error("履歴のHTML構造が変わっています。");
   const next = $("a[href]")
     .toArray()
@@ -71,6 +80,7 @@ export function parseHistory(html: string): {
     .filter((href) => /^\/lesson\/?\?/.test(href) && /(?:page|offset)=/.test(href));
   return {
     lessons,
+    withoutNote,
     months,
     selected,
     next: [...new Set(next)],
